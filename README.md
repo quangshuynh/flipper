@@ -31,8 +31,6 @@ Automatically pulls:
 * CPU Cooler → `"not listed"`
 * OS → `"not listed"`
 
----
-
 ### Extras Detection
 
 Identifies included items:
@@ -71,7 +69,7 @@ For every listing:
 
 ### Location Filtering
 
-* Filters listings within a ~100 mile radius
+* Filters listings within a ~100 mile radius of Rochester
 * Designed for local flipping markets (e.g. Rochester / college areas)
 
 ---
