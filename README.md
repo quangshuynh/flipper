@@ -4,16 +4,29 @@ A Python-powered tool that scans online listings, extracts computer specs using 
 
 ---
 
+## Why This Matters
+
+Finding profitable computer deals manually is time-consuming and inconsistent. Listings are often messy, incomplete, or undervalued due to seller inexperience
+
+Flipper automates this process by:
+- Interpreting unstructured listings
+- Identifying undervalued systems
+- Estimating resale value
+- Surfacing only the best opportunities
+
+---
+
 ## What This Does
 
-This app helps you find undervalued computers (PCs + laptops) by:
-- Scanning listings from marketplaces-
-- Extracting specs automatically (even from messy descriptions)
-- Detecting “good deal” signals (e.g. *“don’t know much about computers”*)
-- Estimating resale value
-- Calculating profit potential
-- Sending alerts to Discord in real-time
+Flipper helps identify undervalued PCs and laptops by:
 
+- Scanning listings from supported sources (modular collectors)
+- Extracting hardware specs from messy descriptions
+- Detecting seller signals that indicate undervaluation
+- Estimating resale value using heuristic pricing models
+- Calculating profit margins
+- Sending real-time alerts to Discord
+  
 ---
 
 ## Core Features
@@ -135,7 +148,7 @@ Output:
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 * Python
 * `requests` – fetching data
@@ -147,10 +160,27 @@ Output:
 
 ---
 
-## 📈 Scoring Logic (Simplified)
+## Scoring Logic (Simplified)
 
 * Profit margin (biggest factor)
 * Price vs market value
 * Seller knowledge signals
 * Distance
 
+---
+
+## Limitations
+
+* Listings may omit key specs
+* Pricing estimates are heuristic-based
+* Some platforms restrict automated data access
+* Condition (e.g. battery health, damage) is not always detectable
+
+---
+
+## Future Improvements
+- Image-based component detection (GPU, case, etc.)
+- Historical price tracking
+- Auto-messaging sellers
+- Machine learning pricing model
+- Mobile dashboard
