@@ -51,8 +51,6 @@ Detects phrases that often indicate undervalued listings:
 * “moving sale”
 * “not sure what it has”
 
-These increase deal score.
-
 ---
 
 ### Pricing Intelligence
@@ -156,6 +154,3 @@ Output:
 * Seller knowledge signals
 * Distance
 
-Goal:
-
-> Filter 100 listings → show top 3–5 worth buying
