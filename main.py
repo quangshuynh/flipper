@@ -35,19 +35,25 @@ def run() -> None:
         raise ValueError("DISCORD_WEBHOOK_URL is missing from environment variables.")
 
     listings = fetch_listings()
-    print(f"Fetched {len(listings)} listings:\n")
+    print(f"Fetched {len(listings)} listings.\n")
 
     for listing in listings:
+        print("=" * 80)
+        print(f"Checking listing: {listing.listing_id}")
+        print(f"Title: {listing.title}")
+
         if has_seen(listing.listing_id):
             print(f"Skipping seen listing: {listing.listing_id}")
             continue
 
         base_specs = extract_specs(listing.title, listing.description)
+
         specs, ai_summary = enrich_specs_with_ai(
             title=listing.title,
             description=listing.description,
             base_specs=base_specs
         )
+
         print(f"AI summary: {ai_summary}")
 
         distance_miles = compute_distance_miles(
@@ -57,13 +63,19 @@ def run() -> None:
             listing_lon=listing.longitude
         )
 
+        print(f"Distance: {distance_miles}")
+
         if distance_miles is not None and distance_miles > max_radius_miles:
-            print(f"Skipping {listing.listing_id}: out of radius ({distance_miles} mi)")
+            print(
+                f"Skipping {listing.listing_id}: "
+                f"out of radius ({distance_miles:.1f} mi > {max_radius_miles:.1f} mi)"
+            )
             mark_seen(listing.listing_id)
             continue
 
         estimated_value = estimate_market_value(specs)
         ideal_buy, ideal_sell = calculate_pricing(estimated_value)
+
         score, profit = score_deal(
             asking_price=listing.price,
             estimated_value=estimated_value,
@@ -84,18 +96,39 @@ def run() -> None:
 
         print(
             f"[{listing.listing_id}] "
-            f"listing_price=${listing.price:.2f}, estimated_value=${estimated_value:.2f}, "
-            f"profit=${profit:.2f}, score={score}\n"
+            f"listing_price=${listing.price:.2f}, "
+            f"estimated_value=${estimated_value:.2f}, "
+            f"ideal_buy=${ideal_buy:.2f}, "
+            f"ideal_sell=${ideal_sell:.2f}, "
+            f"profit=${profit:.2f}, "
+            f"score={score}"
         )
 
         if profit >= min_profit and score >= min_score:
-            success = send_deal_to_discord(webhook_url, deal)
+            print(
+                f"Listing PASSED filters "
+                f"(profit {profit:.2f} >= {min_profit:.2f}, score {score} >= {min_score})"
+            )
+
+            success = send_deal_to_discord(
+                webhook_url=webhook_url,
+                deal=deal,
+                ai_summary=ai_summary
+            )
+
             if success:
                 print(f"Sent deal alert for {listing.listing_id}")
+                mark_seen(listing.listing_id)
             else:
                 print(f"Failed to send alert for {listing.listing_id}")
-
-        mark_seen(listing.listing_id)
+                print("Not marking as seen so it can retry next run.")
+        else:
+            print(
+                f"Listing FAILED filters "
+                f"(profit {profit:.2f} < {min_profit:.2f} "
+                f"or score {score} < {min_score})"
+            )
+            mark_seen(listing.listing_id)
 
 
 if __name__ == "__main__":
