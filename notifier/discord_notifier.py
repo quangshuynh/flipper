@@ -120,7 +120,7 @@ def build_embed(deal: DealEvaluation, ai_summary: str | None = None) -> dict:
         f"**Ideal Buy:** ${deal.ideal_buy_price:.2f}\n"
         f"**Ideal Sell:** ${deal.ideal_sell_price:.2f}\n"
         f"**Estimated Market Value:** ${deal.estimated_value:.2f}\n"
-        f"**Estimated Profit:** ${deal.estimated_profit:.2f}\n"
+        f"**Estimated Ideal Profit:** ${deal.estimated_profit:.2f}\n"
         f"**Deal Score:** {deal.score}/100\n\n"
         f"[Open Listing]({deal.listing.url})"
     )

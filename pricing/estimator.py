@@ -643,7 +643,7 @@ def score_deal(
     :returns: Tuple of score and estimated profit.
     """
     ideal_buy, ideal_sell = calculate_pricing(estimated_value)
-    profit = round(ideal_sell - asking_price, 2)
+    profit = round(ideal_sell - ideal_buy, 2)
     score = 0
 
     if asking_price <= ideal_buy:
