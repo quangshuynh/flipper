@@ -20,7 +20,12 @@ import re
 from dataclasses import asdict
 from typing import Any
 
+from dotenv import load_dotenv
+from openai import OpenAI
+
 from models import ParsedSpecs
+
+load_dotenv()
 
 
 def _clean_text(text: str) -> str:
@@ -165,38 +170,44 @@ def _parse_json_response(text: str) -> dict[str, Any]:
     return json.loads(text)
 
 
-def _call_openai_responses_api(prompt: str, model: str) -> dict[str, Any]:
+def _get_groq_client() -> OpenAI:
     """
-    Call OpenAI Responses API using the openai Python package.
+    Create an OpenAI client pointed at Groq's OpenAI-compatible API.
 
-    Requires:
-    - OPENAI_API_KEY
-    - openai package installed
+    :returns: Configured OpenAI client.
+    """
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is missing.")
+
+    return OpenAI(
+        api_key=api_key,
+        base_url="https://api.groq.com/openai/v1",
+    )
+
+
+def _call_groq_responses_api(prompt: str, model: str) -> dict[str, Any]:
+    """
+    Call Groq Responses API through the OpenAI-compatible client.
+
+    Recommended Groq model examples:
+    - openai/gpt-oss-20b
+    - openai/gpt-oss-120b
+    - llama-3.3-70b-versatile
 
     :param prompt: Prompt text.
-    :param model: Model name.
+    :param model: Groq model ID.
     :returns: Parsed JSON dict.
     """
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError(
-            "openai package is not installed. Run: pip install openai"
-        ) from exc
-
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is missing.")
-
-    client = OpenAI(api_key=api_key)
+    client = _get_groq_client()
 
     response = client.responses.create(
         model=model,
         input=prompt,
-        temperature=0
+        temperature=0,
     )
 
-    text = getattr(response, "output_text", "").strip()
+    text = (response.output_text or "").strip()
     if not text:
         raise RuntimeError("AI response was empty.")
 
@@ -207,7 +218,7 @@ def enrich_specs_with_ai(
     title: str,
     description: str,
     base_specs: ParsedSpecs,
-    model: str = "gpt-4.1-mini"
+    model: str = "openai/gpt-oss-20b",
 ) -> tuple[ParsedSpecs, str]:
     """
     Enrich parsed specs with AI.
@@ -221,17 +232,17 @@ def enrich_specs_with_ai(
     :param title: Listing title.
     :param description: Listing description.
     :param base_specs: Existing extracted specs.
-    :param model: OpenAI model name.
+    :param model: Groq model name.
     :returns: Tuple of (enriched specs, ai summary).
     """
     prompt = _build_prompt(
         title=_clean_text(title),
         description=_clean_text(description),
-        base_specs=base_specs
+        base_specs=base_specs,
     )
 
     try:
-        result = _call_openai_responses_api(prompt, model=model)
+        result = _call_groq_responses_api(prompt, model=model)
     except Exception:
         return base_specs, "AI enrichment unavailable. Used regex extraction only."
 
