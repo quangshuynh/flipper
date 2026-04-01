@@ -10,6 +10,34 @@ Expanded for 2026 relevance:
 import re
 
 from models import ParsedSpecs
+import sqlite3
+
+DB_PATH = "parts_prices.db"  
+
+
+def _get_dynamic_price(part_name: str) -> float | None:
+    """
+    Get dynamic market price from DB.
+
+    :param part_name: Normalized part name.
+    :returns: Price if found, else None.
+    """
+    if not part_name or part_name == "not listed":
+        return None
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT market_price FROM part_prices WHERE part_name = ?",
+            (part_name,)
+        )
+        row = cur.fetchone()
+        conn.close()
+
+        return float(row[0]) if row else None
+    except Exception:
+        return None
 
 
 GPU_VALUES = {
@@ -478,6 +506,7 @@ def _lookup_partial(
 ) -> int:
     """
     Match exact first, then partial containment after normalization.
+    Also checks dynamic DB pricing FIRST.
 
     :param value: Value to search for.
     :param value_map: Map of known values to prices.
@@ -487,6 +516,11 @@ def _lookup_partial(
     """
     normalize = normalizer or _normalize_spaces
     normalized = normalize(value)
+
+    dynamic_price = _get_dynamic_price(normalized)
+    if dynamic_price is not None:
+        return int(dynamic_price)
+
     normalized_map: dict[str, int] = {}
 
     for key, amount in value_map.items():
