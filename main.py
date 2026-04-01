@@ -34,7 +34,7 @@ def run() -> None:
         raise ValueError("DISCORD_WEBHOOK_URL is missing from environment variables.")
 
     listings = fetch_listings()
-    print(f"Fetched {len(listings)} listings")
+    print(f"Fetched {len(listings)} listings:\n")
 
     for listing in listings:
         if has_seen(listing.listing_id):
@@ -77,7 +77,7 @@ def run() -> None:
 
         print(
             f"[{listing.listing_id}] "
-            f"price=${listing.price:.2f}, value=${estimated_value:.2f}, "
+            f"listing_price=${listing.price:.2f}, offer=${estimated_value:.2f}, "
             f"profit=${profit:.2f}, score={score}"
         )
 
