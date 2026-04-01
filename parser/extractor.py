@@ -7,7 +7,7 @@ from models import ParsedSpecs
 
 
 GPU_PATTERNS = [
-    # RTX 5000 series (future-proofing)
+    # RTX 5000 series
     r"\bRTX\s?5090\b", r"\bRTX\s?5080\b", r"\bRTX\s?5070(?:\s?Ti)?\b",
 
     # RTX 4000 series
