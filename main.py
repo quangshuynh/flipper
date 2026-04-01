@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from collectors.json_feed_collector import fetch_listings
 from parser.extractor import extract_specs
+from parser.ai_enricher import enrich_specs_with_ai
 from pricing.estimator import estimate_market_value, calculate_pricing, score_deal
 from notifier.discord_notifier import send_deal_to_discord
 from utils.distance import compute_distance_miles
@@ -41,7 +42,13 @@ def run() -> None:
             print(f"Skipping seen listing: {listing.listing_id}")
             continue
 
-        specs = extract_specs(listing.title, listing.description)
+        base_specs = extract_specs(listing.title, listing.description)
+        specs, ai_summary = enrich_specs_with_ai(
+            title=listing.title,
+            description=listing.description,
+            base_specs=base_specs
+        )
+        print(f"\nAI summary: {ai_summary}")
 
         distance_miles = compute_distance_miles(
             home_lat=home_lat,

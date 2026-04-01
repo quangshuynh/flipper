@@ -6,11 +6,15 @@ import requests
 from models import DealEvaluation
 
 
-def format_deal_message(deal: DealEvaluation) -> str:
+def format_deal_message(
+    deal: DealEvaluation,
+    ai_summary: str | None = None
+) -> str:
     """
     Format Discord message for a deal.
 
     :param deal: DealEvaluation object.
+    :param ai_summary: Optional AI-generated summary.
     :returns: Discord message string.
     """
     specs = deal.specs
@@ -22,7 +26,7 @@ def format_deal_message(deal: DealEvaluation) -> str:
         else "unknown"
     )
 
-    return (
+    message = (
         "🚨 **POTENTIAL DEAL FOUND**\n\n"
         f"**Title:** {deal.listing.title}\n"
         f"**Location:** {deal.listing.location_text or 'not listed'}\n"
@@ -41,6 +45,15 @@ def format_deal_message(deal: DealEvaluation) -> str:
         f"{extras}\n\n"
         "**🚩 Flags**\n"
         f"{flags}\n\n"
+    )
+
+    if ai_summary:
+        message += (
+            "**🧠 AI Summary**\n"
+            f"{ai_summary}\n\n"
+        )
+
+    message += (
         "**💰 Pricing**\n"
         f"Listing Price: ${deal.listing.price:.2f}\n"
         f"Ideal Buy: ${deal.ideal_buy_price:.2f}\n"
@@ -51,16 +64,23 @@ def format_deal_message(deal: DealEvaluation) -> str:
         f"🔗 {deal.listing.url}"
     )
 
+    return message
 
-def send_deal_to_discord(webhook_url: str, deal: DealEvaluation) -> bool:
+
+def send_deal_to_discord(
+    webhook_url: str,
+    deal: DealEvaluation,
+    ai_summary: str | None = None
+) -> bool:
     """
     Send a deal alert to Discord.
 
     :param webhook_url: Discord webhook URL.
     :param deal: DealEvaluation object.
+    :param ai_summary: Optional AI-generated summary.
     :returns: True on success, else False.
     """
-    message = format_deal_message(deal)
+    message = format_deal_message(deal, ai_summary=ai_summary)
 
     response = requests.post(
         webhook_url,
