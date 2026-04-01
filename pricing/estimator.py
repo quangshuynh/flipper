@@ -7,6 +7,8 @@ Expanded for 2026 relevance:
 - DDR generation-aware RAM valuation
 """
 
+import re
+
 from models import ParsedSpecs
 
 
@@ -280,6 +282,35 @@ EXTRA_VALUES = {
 }
 
 
+GPU_PREFIX_BY_MODEL = {
+    "5090": "RTX",
+    "5080": "RTX",
+    "5070": "RTX",
+    "5060": "RTX",
+    "5050": "RTX",
+    "4090": "RTX",
+    "4080": "RTX",
+    "4070": "RTX",
+    "4060": "RTX",
+    "4050": "RTX",
+    "3090": "RTX",
+    "3080": "RTX",
+    "3070": "RTX",
+    "3060": "RTX",
+    "3050": "RTX",
+    "2080": "RTX",
+    "2070": "RTX",
+    "2060": "RTX",
+    "1660": "GTX",
+    "1650": "GTX",
+    "1080": "GTX",
+    "1070": "GTX",
+    "1060": "GTX",
+    "1050": "GTX",
+    "1030": "GTX",
+}
+
+
 def _normalize_spaces(value: str) -> str:
     """
     Normalize spacing for dictionary matching.
@@ -287,25 +318,186 @@ def _normalize_spaces(value: str) -> str:
     :param value: Input text.
     :returns: Normalized text.
     """
-    return " ".join(str(value).split())
+    return re.sub(r"\s+", " ", str(value)).strip()
 
 
-def _lookup_partial(value: str, value_map: dict[str, int], default: int = 0) -> int:
+def _normalize_gpu_value(value: str) -> str:
     """
-    Match exact first, then partial containment.
+    Canonicalize messy GPU strings for pricing lookup.
+
+    :param value: Value to search for.
+    :returns: Canonical GPU value.
+    """
+    text = _normalize_spaces(value)
+    if text == "not listed":
+        return text
+
+    cleaned = re.sub(
+        r"\b(NVIDIA|GEFORCE|AMD|RADEON|EVGA|ASUS|MSI|GIGABYTE|ZOTAC|PNY|SAPPHIRE|XFX|POWERCOLOR|ASROCK|FOUNDERS\s+EDITION|FE)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    cleaned = _normalize_spaces(cleaned)
+
+    arc_match = re.search(r"\bArc\s*(A(?:770|750|580|380))\b", cleaned, flags=re.IGNORECASE)
+    if arc_match:
+        return f"Arc {arc_match.group(1).upper()}"
+
+    amd_match = re.search(
+        r"\bRX\s*(?P<model>7900|7800|7700|7600|6950|6900|6800|6750|6700|6650|6600|5700|5600|590|580|570)"
+        r"(?P<suffix>(?:\s*(?:XTX|XT))?)\b",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if amd_match:
+        suffix_tokens = re.findall(r"xtx|xt", amd_match.group("suffix") or "", flags=re.IGNORECASE)
+        suffix = f" {suffix_tokens[0].upper()}" if suffix_tokens else ""
+        return f"RX {amd_match.group('model')}{suffix}"
+
+    nvidia_match = re.search(
+        r"\b(?:(?P<prefix>RTX|GTX)\s*)?"
+        r"(?P<model>5090|5080|5070|5060|5050|4090|4080|4070|4060|4050|3090|3080|3070|3060|3050|2080|2070|2060|1660|1650|1080|1070|1060|1050|1030)"
+        r"(?P<suffix>(?:\s*(?:Ti|Super)){0,2})"
+        r"(?:\s*\d{1,2}\s*GB)?\b",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if nvidia_match:
+        prefix = (nvidia_match.group("prefix") or GPU_PREFIX_BY_MODEL[nvidia_match.group("model")]).upper()
+        suffix_tokens = {token.lower() for token in re.findall(r"ti|super", nvidia_match.group("suffix") or "", flags=re.IGNORECASE)}
+        suffix = ""
+        if "ti" in suffix_tokens and "super" in suffix_tokens:
+            suffix = " Ti Super"
+        elif "ti" in suffix_tokens:
+            suffix = " Ti"
+        elif "super" in suffix_tokens:
+            suffix = " Super"
+        return f"{prefix} {nvidia_match.group('model')}{suffix}"
+
+    return cleaned
+
+
+def _normalize_cpu_value(value: str) -> str:
+    """
+    Canonicalize messy CPU strings for pricing lookup.
+
+    :param value: Value to search for.
+    :returns: Canonical CPU value.
+    """
+    text = _normalize_spaces(value)
+    if text == "not listed":
+        return text
+
+    ultra_match = re.search(
+        r"\b(?:Core\s+)?Ultra\s*(?P<tier>[579])\s*(?P<model>\d{3}[A-Za-z]{0,3})\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if ultra_match:
+        return f"Ultra {ultra_match.group('tier')} {ultra_match.group('model').upper()}"
+
+    intel_match = re.search(
+        r"\b(?P<tier>i[3579])\s*[- ]?\s*(?P<model>\d{4,5}[A-Za-z]{0,3})\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if intel_match:
+        return f"{intel_match.group('tier').lower()}-{intel_match.group('model').upper()}"
+
+    ryzen_match = re.search(
+        r"\bRyzen\s*(?P<tier>[3579])\s*(?P<model>\d{4,5}[A-Za-z0-9]{0,4})\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if ryzen_match:
+        return f"Ryzen {ryzen_match.group('tier')} {ryzen_match.group('model').upper()}"
+
+    xeon_match = re.search(r"\bXeon(?:\s+(?P<model>[A-Za-z0-9-]+))?\b", text, flags=re.IGNORECASE)
+    if xeon_match:
+        model = xeon_match.group("model")
+        return f"Xeon {model.upper()}".strip() if model else "Xeon"
+
+    loose_match = re.search(r"\b(Ryzen\s?[3579]|i[3579])\b", text, flags=re.IGNORECASE)
+    if loose_match:
+        return loose_match.group(1).replace("  ", " ")
+
+    return text
+
+
+def _normalize_ram_value(value: str) -> str:
+    """
+    Canonicalize RAM strings for pricing lookup.
+
+    :param value: Value to search for.
+    :returns: Canonical RAM value.
+    """
+    text = _normalize_spaces(value)
+    if text == "not listed":
+        return text
+
+    kit_match = re.search(r"\b(?P<count>\d+)\s*[xX]\s*(?P<size>\d+)\s*GB\b", text, flags=re.IGNORECASE)
+    ddr_match = re.search(r"\b(?P<ddr>DDR[1-5])\b", text, flags=re.IGNORECASE)
+    if kit_match:
+        total_gb = int(kit_match.group("count")) * int(kit_match.group("size"))
+        if ddr_match:
+            return f"{total_gb} GB {ddr_match.group('ddr').upper()}"
+        return f"{total_gb} GB RAM"
+
+    capacity_then_ddr = re.search(
+        r"\b(?P<size>\d+)\s*GB\b(?:\s*(?:RAM|memory))?(?:\s*[-@+/.a-z0-9]{0,20})?\b(?P<ddr>DDR[1-5])\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if capacity_then_ddr:
+        return f"{capacity_then_ddr.group('size')} GB {capacity_then_ddr.group('ddr').upper()}"
+
+    ddr_then_capacity = re.search(
+        r"\b(?P<ddr>DDR[1-5])\b(?:\s*[-@+/.a-z0-9]{0,20})?\b(?P<size>\d+)\s*GB\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if ddr_then_capacity:
+        return f"{ddr_then_capacity.group('size')} GB {ddr_then_capacity.group('ddr').upper()}"
+
+    capacity_only = re.search(r"\b(?P<size>\d+)\s*GB\b(?:\s*(?:RAM|memory))?\b", text, flags=re.IGNORECASE)
+    if capacity_only:
+        return f"{capacity_only.group('size')} GB RAM"
+
+    if ddr_match:
+        return ddr_match.group("ddr").upper()
+
+    return text
+
+
+def _lookup_partial(
+    value: str,
+    value_map: dict[str, int],
+    default: int = 0,
+    normalizer=None,
+) -> int:
+    """
+    Match exact first, then partial containment after normalization.
 
     :param value: Value to search for.
     :param value_map: Map of known values to prices.
     :param default: Default if not found.
+    :param normalizer: Optional component-specific normalizer.
     :returns: Numeric estimated value.
     """
-    normalized = _normalize_spaces(value)
+    normalize = normalizer or _normalize_spaces
+    normalized = normalize(value)
+    normalized_map: dict[str, int] = {}
 
-    if normalized in value_map:
-        return value_map[normalized]
+    for key, amount in value_map.items():
+        normalized_key = normalize(key)
+        normalized_map.setdefault(normalized_key, amount)
+
+    if normalized in normalized_map:
+        return normalized_map[normalized]
 
     normalized_lower = normalized.lower()
-    for key, amount in value_map.items():
+    for key, amount in normalized_map.items():
         key_lower = key.lower()
         if key_lower in normalized_lower or normalized_lower in key_lower:
             return amount
@@ -385,9 +577,9 @@ def estimate_market_value(specs: ParsedSpecs) -> float:
     """
     value = 40
 
-    gpu_value = _lookup_partial(specs.gpu, GPU_VALUES, 0)
-    cpu_value = _lookup_partial(specs.cpu, CPU_VALUES, 0)
-    ram_value = _lookup_partial(specs.ram, RAM_VALUES, 0)
+    gpu_value = _lookup_partial(specs.gpu, GPU_VALUES, 0, normalizer=_normalize_gpu_value)
+    cpu_value = _lookup_partial(specs.cpu, CPU_VALUES, 0, normalizer=_normalize_cpu_value)
+    ram_value = _lookup_partial(specs.ram, RAM_VALUES, 0, normalizer=_normalize_ram_value)
 
     value += gpu_value
     value += cpu_value

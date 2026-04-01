@@ -48,7 +48,7 @@ def run() -> None:
             description=listing.description,
             base_specs=base_specs
         )
-        print(f"\nAI summary: {ai_summary}")
+        print(f"AI summary: {ai_summary}")
 
         distance_miles = compute_distance_miles(
             home_lat=home_lat,
@@ -84,8 +84,8 @@ def run() -> None:
 
         print(
             f"[{listing.listing_id}] "
-            f"listing_price=${listing.price:.2f}, offer=${estimated_value:.2f}, "
-            f"profit=${profit:.2f}, score={score}"
+            f"listing_price=${listing.price:.2f}, estimated_value=${estimated_value:.2f}, "
+            f"profit=${profit:.2f}, score={score}\n"
         )
 
         if profit >= min_profit and score >= min_score:

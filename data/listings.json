@@ -11,6 +11,17 @@
     "location_text": "Rochester, NY"
   },
   {
+    "id": "fb_102",
+    "source": "facebook",
+    "title": "3080 Gaming PC",
+    "description": "- CPU: Ryzen 5 5600G @ 3.90Ghz\n- GPU: EVGA 3080 10gb\n- RAM: Corsair Vengeance 32GB DDR4 2133m/t\n- Storage: 500gb SSD\n- Motherboard: Biostar B450GT3 Micro-ATX\n- CPU cooler: CoolerMaster 212 Black\n- Case: Corsair 3500X Mid-Tower\n- PSU: Corsair 850W 80+ Gold\n- OS: Windows 11 Home\n\nAlso comes with:\n- WiFi adapter\n- Lian Li Strimmer LEDs\n- GPU thermal pads\n- Logitech G413 keyboard\n- CoolerMaster mouse\n\nThis PC is built for high-performance gaming and can handle demanding titles at high/ultra settings with ease. Great for competitive gaming, content creation, and everyday use. Works and functions amazing, no problems or issues",
+    "price": "$950",
+    "url": "https://example.com/listing/102",
+    "latitude": 43.1566,
+    "longitude": -77.6088,
+    "location_text": "Rochester, NY"
+  },
+  {
     "id": "cl_202",
     "source": "craigslist",
     "title": "Custom Desktop",
