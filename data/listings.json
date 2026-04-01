@@ -1,0 +1,24 @@
+[
+  {
+    "id": "fb_101",
+    "source": "facebook",
+    "title": "Gaming PC RTX 3070",
+    "description": "RTX 3070, Ryzen 5 5600X, 16GB RAM, 1TB SSD, Windows 11, includes monitor. Don't know much about computers.",
+    "price": "$650",
+    "url": "https://example.com/listing/101",
+    "latitude": 43.1566,
+    "longitude": -77.6088,
+    "location_text": "Rochester, NY"
+  },
+  {
+    "id": "cl_202",
+    "source": "craigslist",
+    "title": "Custom Desktop",
+    "description": "i7-10700K, 32GB RAM, RTX 3060 Ti, 2TB NVMe, 750W PSU, keyboard and mouse included.",
+    "price": 700,
+    "url": "https://example.com/listing/202",
+    "latitude": 43.0481,
+    "longitude": -76.1474,
+    "location_text": "Syracuse, NY"
+  }
+]

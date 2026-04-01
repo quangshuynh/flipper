@@ -5,7 +5,7 @@ Main entry point for Flipper MVP.
 import os
 from dotenv import load_dotenv
 
-from collectors.sample_collector import fetch_listings
+from collectors.json_feed_collector import fetch_listings
 from parser.extractor import extract_specs
 from pricing.estimator import estimate_market_value, calculate_pricing, score_deal
 from notifier.discord_notifier import send_deal_to_discord
