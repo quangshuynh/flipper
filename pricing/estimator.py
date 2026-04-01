@@ -34,6 +34,8 @@ def _get_dynamic_price(part_name: str) -> float | None:
         )
         row = cur.fetchone()
         conn.close()
+        if row:
+            print(f"[PRICE DB] {part_name} -> ${row[0]}")
 
         return float(row[0]) if row else None
     except Exception:

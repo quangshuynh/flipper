@@ -171,8 +171,8 @@ def send_deal_to_discord(
         timeout=10
     )
 
-    print("Discord request URL:", response.request.url)
-    print("Discord status:", response.status_code)
-    print("Discord body:", response.text)
+    #print("Discord request URL:", response.request.url)
+    #print("Discord status:", response.status_code)
+    #print("Discord body:", response.text)
 
     return response.status_code in (200, 204)
