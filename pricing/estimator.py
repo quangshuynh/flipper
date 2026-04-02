@@ -11,8 +11,9 @@ import re
 
 from models import ParsedSpecs
 import sqlite3
+import os
 
-DB_PATH = "parts_prices.db"  
+DB_PATH = os.path.join("data", "part_prices.db")
 
 
 def _get_dynamic_price(part_name: str) -> float | None:

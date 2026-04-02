@@ -4,9 +4,10 @@ Simple SQLite-based dedupe store for processed listings.
 
 import sqlite3
 from pathlib import Path
+import os
 
 
-DB_PATH = Path("flipper_seen.db")
+DB_PATH = Path("data/flipper_seen.db")
 
 
 def init_db() -> None:
