@@ -1,10 +1,11 @@
 """
 Update part prices from eBay Browse API and store them locally.
 
+This version uses an already-generated OAuth access token from .env.
+
 Required environment variables:
-    EBAY_ENV=production            # or: sandbox
-    EBAY_CLIENT_ID=...
-    EBAY_CLIENT_SECRET=...
+    EBAY_ENV=sandbox
+    EBAY_OAUTH_TOKEN=your_access_token_here
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from statistics import median
 from typing import Any
 
 import requests
-from requests.auth import HTTPBasicAuth
 
 
 DB_PATH = os.path.join("data", "parts_prices.db")
@@ -35,22 +35,13 @@ PART_QUERIES = [
 ]
 
 
-def get_ebay_environment() -> tuple[str, str]:
-    """
-    Returns (token_url, browse_url) for the configured environment.
-    """
-    env = os.getenv("EBAY_ENV", "production").strip().lower()
+def get_browse_url() -> str:
+    env = os.getenv("EBAY_ENV", "sandbox").strip().lower()
 
     if env == "sandbox":
-        return (
-            "https://api.sandbox.ebay.com/identity/v1/oauth2/token",
-            "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search",
-        )
+        return "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
 
-    return (
-        "https://api.ebay.com/identity/v1/oauth2/token",
-        "https://api.ebay.com/buy/browse/v1/item_summary/search",
-    )
+    return "https://api.ebay.com/buy/browse/v1/item_summary/search"
 
 
 def init_price_table() -> None:
@@ -77,73 +68,31 @@ def init_price_table() -> None:
 
 def get_ebay_token() -> str:
     """
-    Fetch a fresh eBay OAuth application token using client credentials.
+    Read a pre-generated OAuth access token from environment variables.
     """
-    client_id = os.getenv("EBAY_CLIENT_ID", "").strip()
-    client_secret = os.getenv("EBAY_CLIENT_SECRET", "").strip()
-    token_url, _ = get_ebay_environment()
-
-    if not client_id or not client_secret:
-        raise ValueError(
-            "EBAY_CLIENT_ID or EBAY_CLIENT_SECRET missing from environment variables."
-        )
-
-    # Safe debug output
-    print(f"Using token endpoint: {token_url}")
-    print(f"Client ID prefix: {client_id[:12]}... (len={len(client_id)})")
-    print(f"Client Secret length: {len(client_secret)}")
-
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-
-    data = {
-        "grant_type": "client_credentials",
-        "scope": "https://api.ebay.com/oauth/api_scope",
-    }
-
-    response = requests.post(
-        token_url,
-        headers=headers,
-        data=data,
-        auth=HTTPBasicAuth(client_id, client_secret),
-        timeout=20,
-    )
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            "Token request failed.\n"
-            f"Status: {response.status_code}\n"
-            f"Response: {response.text}\n\n"
-            "Check these:\n"
-            "1. EBAY_ENV matches your keys (sandbox vs production)\n"
-            "2. EBAY_CLIENT_ID is the App ID\n"
-            "3. EBAY_CLIENT_SECRET is the Cert ID / Client Secret\n"
-            "4. No extra spaces or quotes are in your .env"
-        )
-
-    payload = response.json()
-    token = payload.get("access_token")
+    token = os.getenv("EBAY_OAUTH_TOKEN", "").strip()
 
     if not token:
-        raise RuntimeError(f"No access_token in token response: {response.text}")
+        raise ValueError("EBAY_OAUTH_TOKEN missing from environment variables.")
 
-    print(f"Access token acquired. Prefix: {token[:20]}...")
+    print(f"Using OAuth token prefix: {token[:24]}...")
+    print(f"Token length: {len(token)}")
     return token
 
 
 def search_ebay(query: str, token: str, limit: int = 20) -> list[dict[str, Any]]:
-    _, browse_url = get_ebay_environment()
+    browse_url = get_browse_url()
 
     headers = {
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        "Accept": "application/json",
     }
 
     params = {
         "q": query,
         "limit": limit,
-        "filter": "buyingOptions:{FIXED_PRICE},conditions:{NEW|USED}",
+        # Start simple. Add filters back later if needed.
     }
 
     response = requests.get(
@@ -152,6 +101,11 @@ def search_ebay(query: str, token: str, limit: int = 20) -> list[dict[str, Any]]
         params=params,
         timeout=20,
     )
+
+    print(f"\nSearch query: {query}")
+    print(f"Request URL: {response.url}")
+    print(f"Status: {response.status_code}")
+    print(f"Response body: {response.text[:1000]}")
 
     if response.status_code != 200:
         raise RuntimeError(
