@@ -1,0 +1,5 @@
+[
+  {"id": "undervalued", "price": 400, "title": "RTX 3060 PC", "description": "Ryzen 5 5600X, 16GB RAM"},
+  {"id": "overpriced", "price": 700, "title": "RTX 3060 PC", "description": "Ryzen 5 5600X, 16GB RAM"},
+  {"id": "incomplete", "price": 300, "title": "Gaming PC", "description": "Works well, specs unknown"}
+]

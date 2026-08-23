@@ -27,7 +27,7 @@ def fetch_listings() -> List[Listing]:
             url="https://example.com/listing/1",
             latitude=43.1566,
             longitude=-77.6088,
-            location_text="Rochester, NY"
+            location_text="Rochester, NY",
         ),
         Listing(
             listing_id="fb_002",
@@ -42,7 +42,7 @@ def fetch_listings() -> List[Listing]:
             url="https://example.com/listing/2",
             latitude=43.0481,
             longitude=-76.1474,
-            location_text="Syracuse, NY"
+            location_text="Syracuse, NY",
         ),
         Listing(
             listing_id="fb_003",
@@ -56,6 +56,6 @@ def fetch_listings() -> List[Listing]:
             url="https://example.com/listing/3",
             latitude=42.8864,
             longitude=-78.8784,
-            location_text="Buffalo, NY"
+            location_text="Buffalo, NY",
         ),
     ]

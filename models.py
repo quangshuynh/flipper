@@ -22,6 +22,7 @@ class Listing:
     :param location_text: Human-readable location string.
     :returns: Listing object.
     """
+
     listing_id: str
     source: str
     title: str
@@ -51,6 +52,7 @@ class ParsedSpecs:
     :param flags: Seller/deal signals.
     :returns: ParsedSpecs object.
     """
+
     gpu: str = "not listed"
     cpu: str = "not listed"
     ram: str = "not listed"
@@ -72,18 +74,48 @@ class DealEvaluation:
     :param listing: Raw listing object.
     :param specs: Parsed specs.
     :param distance_miles: Distance from home base.
-    :param estimated_value: Estimated market value.
+    :param estimated_market_value: Estimated market value.
+    :param asking_price: Seller asking price.
     :param ideal_buy_price: Best target buy price.
-    :param ideal_sell_price: Good target sell price.
-    :param estimated_profit: Estimated profit.
+    :param expected_resale_value: Expected resale value after a conservative adjustment.
+    :param estimated_gross_profit: Expected resale value minus asking price.
+    :param estimated_roi: Gross profit divided by asking price, when valid.
     :param score: Deal score.
     :returns: DealEvaluation object.
     """
+
     listing: Listing
     specs: ParsedSpecs
     distance_miles: Optional[float]
-    estimated_value: float
+    estimated_market_value: float
+    asking_price: float
     ideal_buy_price: float
-    ideal_sell_price: float
-    estimated_profit: float
+    expected_resale_value: float
+    estimated_gross_profit: float
+    estimated_roi: Optional[float]
     score: int
+    reasons: List[str] = field(default_factory=list)
+
+    @property
+    def estimated_value(self) -> float:
+        """
+        return the backward-compatible market value alias
+        :returns: estimated market value
+        """
+        return self.estimated_market_value
+
+    @property
+    def ideal_sell_price(self) -> float:
+        """
+        return the backward-compatible resale value alias
+        :returns: expected resale value
+        """
+        return self.expected_resale_value
+
+    @property
+    def estimated_profit(self) -> float:
+        """
+        return the backward-compatible gross profit alias
+        :returns: estimated gross profit
+        """
+        return self.estimated_gross_profit

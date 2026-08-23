@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from collectors.json_feed_collector import fetch_listings
 from parser.extractor import extract_specs
 from parser.ai_enricher import enrich_specs_with_ai
-from pricing.estimator import estimate_market_value, calculate_pricing, score_deal
+from pricing.estimator import estimate_market_value, calculate_pricing_result, score_deal
 from notifier.discord_notifier import send_deal_to_discord
 from utils.distance import compute_distance_miles
 from utils.dedupe import init_db, has_seen, mark_seen
@@ -32,7 +32,7 @@ def run() -> None:
     min_score = int(os.getenv("MIN_DEAL_SCORE", "55"))
 
     if not webhook_url:
-        raise ValueError("DISCORD_WEBHOOK_URL is missing from environment variables.")
+        print("DISCORD_WEBHOOK_URL is not configured; alerts are disabled.")
 
     listings = fetch_listings()
     print(f"Fetched {len(listings)} listings.\n")
@@ -49,9 +49,7 @@ def run() -> None:
         base_specs = extract_specs(listing.title, listing.description)
 
         specs, ai_summary = enrich_specs_with_ai(
-            title=listing.title,
-            description=listing.description,
-            base_specs=base_specs
+            title=listing.title, description=listing.description, base_specs=base_specs
         )
 
         print(f"AI summary: {ai_summary}")
@@ -60,7 +58,7 @@ def run() -> None:
             home_lat=home_lat,
             home_lon=home_lon,
             listing_lat=listing.latitude,
-            listing_lon=listing.longitude
+            listing_lon=listing.longitude,
         )
 
         print(f"Distance: {distance_miles}")
@@ -74,33 +72,35 @@ def run() -> None:
             continue
 
         estimated_value = estimate_market_value(specs)
-        ideal_buy, ideal_sell = calculate_pricing(estimated_value)
+        pricing = calculate_pricing_result(estimated_value, listing.price)
 
         score, profit = score_deal(
             asking_price=listing.price,
             estimated_value=estimated_value,
             specs=specs,
-            distance_miles=distance_miles
+            distance_miles=distance_miles,
         )
 
         deal = DealEvaluation(
             listing=listing,
             specs=specs,
             distance_miles=distance_miles,
-            estimated_value=estimated_value,
-            ideal_buy_price=ideal_buy,
-            ideal_sell_price=ideal_sell,
-            estimated_profit=profit,
-            score=score
+            estimated_market_value=estimated_value,
+            asking_price=listing.price,
+            ideal_buy_price=pricing.ideal_buy_price,
+            expected_resale_value=pricing.expected_resale_value,
+            estimated_gross_profit=profit,
+            estimated_roi=pricing.estimated_roi,
+            score=score,
         )
 
         print(
             f"[{listing.listing_id}] "
             f"listing_price=${listing.price:.2f}, "
             f"estimated_value=${estimated_value:.2f}, "
-            f"ideal_buy=${ideal_buy:.2f}, "
-            f"ideal_sell=${ideal_sell:.2f}, "
-            f"profit=${profit:.2f}, "
+            f"ideal_buy=${pricing.ideal_buy_price:.2f}, "
+            f"expected_resale=${pricing.expected_resale_value:.2f}, "
+            f"gross_profit=${profit:.2f}, "
             f"score={score}"
         )
 
@@ -110,10 +110,12 @@ def run() -> None:
                 f"(profit {profit:.2f} >= {min_profit:.2f}, score {score} >= {min_score})"
             )
 
+            if not webhook_url:
+                print("Alert skipped because Discord is not configured.")
+                continue
+
             success = send_deal_to_discord(
-                webhook_url=webhook_url,
-                deal=deal,
-                ai_summary=ai_summary
+                webhook_url=webhook_url, deal=deal, ai_summary=ai_summary
             )
 
             if success:

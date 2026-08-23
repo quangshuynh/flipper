@@ -4,7 +4,6 @@ Simple SQLite-based dedupe store for processed listings.
 
 import sqlite3
 from pathlib import Path
-import os
 
 
 DB_PATH = Path("data/flipper_seen.db")
@@ -16,6 +15,7 @@ def init_db() -> None:
 
     :returns: None.
     """
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute(
@@ -53,9 +53,6 @@ def mark_seen(listing_id: str) -> None:
     """
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute(
-        "INSERT OR IGNORE INTO seen_listings (listing_id) VALUES (?)",
-        (listing_id,)
-    )
+    cur.execute("INSERT OR IGNORE INTO seen_listings (listing_id) VALUES (?)", (listing_id,))
     conn.commit()
     conn.close()

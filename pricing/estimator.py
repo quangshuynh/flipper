@@ -8,12 +8,50 @@ Expanded for 2026 relevance:
 """
 
 import re
+from dataclasses import dataclass
 
 from models import ParsedSpecs
 import sqlite3
 import os
 
 DB_PATH = os.path.join("data", "part_prices.db")
+
+
+@dataclass(frozen=True)
+class PricingResult:
+    """Explainable pricing outputs for one listing."""
+
+    estimated_market_value: float
+    expected_resale_value: float
+    ideal_buy_price: float
+    asking_price: float
+    estimated_gross_profit: float
+    estimated_roi: float | None
+
+
+def calculate_pricing_result(estimated_value: float, asking_price: float) -> PricingResult:
+    """
+    calculate listing-specific economics without claiming net profit
+    :param estimated_value: estimated market value
+    :param asking_price: seller asking price
+    :returns: listing-specific pricing result
+    """
+    ideal_buy, expected_resale = calculate_pricing(estimated_value)
+    try:
+        normalized_price = float(asking_price)
+    except (TypeError, ValueError):
+        normalized_price = 0.0
+    normalized_price = max(normalized_price, 0.0)
+    gross_profit = round(expected_resale - normalized_price, 2)
+    roi = round(gross_profit / normalized_price, 4) if normalized_price > 0 else None
+    return PricingResult(
+        estimated_market_value=round(float(estimated_value), 2),
+        expected_resale_value=expected_resale,
+        ideal_buy_price=ideal_buy,
+        asking_price=round(normalized_price, 2),
+        estimated_gross_profit=gross_profit,
+        estimated_roi=roi,
+    )
 
 
 def _get_dynamic_price(part_name: str) -> float | None:
@@ -29,10 +67,7 @@ def _get_dynamic_price(part_name: str) -> float | None:
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute(
-            "SELECT market_price FROM part_prices WHERE part_name = ?",
-            (part_name,)
-        )
+        cur.execute("SELECT market_price FROM part_prices WHERE part_name = ?", (part_name,))
         row = cur.fetchone()
         conn.close()
         if row:
@@ -52,7 +87,6 @@ GPU_VALUES = {
     "RTX 5060 Ti": 430,
     "RTX 5060": 330,
     "RTX 5050": 220,
-
     # RTX 40 series
     "RTX 4090": 1400,
     "RTX 4080 Super": 950,
@@ -64,7 +98,6 @@ GPU_VALUES = {
     "RTX 4060 Ti": 320,
     "RTX 4060": 260,
     "RTX 4050": 200,
-
     # RTX 30 series
     "RTX 3090 Ti": 700,
     "RTX 3090": 620,
@@ -75,7 +108,6 @@ GPU_VALUES = {
     "RTX 3060 Ti": 260,
     "RTX 3060": 220,
     "RTX 3050": 150,
-
     # RTX 20 series
     "RTX 2080 Ti": 260,
     "RTX 2080 Super": 220,
@@ -84,7 +116,6 @@ GPU_VALUES = {
     "RTX 2070": 175,
     "RTX 2060 Super": 160,
     "RTX 2060": 140,
-
     # GTX 10 series
     "GTX 1080 Ti": 180,
     "GTX 1080": 140,
@@ -94,14 +125,12 @@ GPU_VALUES = {
     "GTX 1050 Ti": 60,
     "GTX 1050": 50,
     "GTX 1030": 30,
-
     # GTX 16 series
     "GTX 1660 Ti": 125,
     "GTX 1660 Super": 120,
     "GTX 1660": 110,
     "GTX 1650 Super": 90,
     "GTX 1650": 80,
-
     # AMD Radeon RX 7000
     "RX 7900 XTX": 760,
     "RX 7900 XT": 620,
@@ -109,7 +138,6 @@ GPU_VALUES = {
     "RX 7700 XT": 330,
     "RX 7600 XT": 240,
     "RX 7600": 200,
-
     # AMD Radeon RX 6000
     "RX 6950 XT": 500,
     "RX 6900 XT": 430,
@@ -120,7 +148,6 @@ GPU_VALUES = {
     "RX 6650 XT": 185,
     "RX 6600 XT": 170,
     "RX 6600": 150,
-
     # AMD Radeon RX 5000 / older flip staples
     "RX 5700 XT": 130,
     "RX 5700": 115,
@@ -128,7 +155,6 @@ GPU_VALUES = {
     "RX 590": 80,
     "RX 580": 70,
     "RX 570": 60,
-
     # Intel Arc
     "Arc A770": 220,
     "Arc A750": 180,
@@ -146,7 +172,6 @@ CPU_VALUES = {
     "Ryzen 7 9800X3D": 400,
     "Ryzen 7 9700X": 240,
     "Ryzen 5 9600X": 180,
-
     # AMD Ryzen 7000 / X3D
     "Ryzen 9 7950X3D": 430,
     "Ryzen 9 7950X": 320,
@@ -157,7 +182,6 @@ CPU_VALUES = {
     "Ryzen 7 7700": 165,
     "Ryzen 5 7600X": 145,
     "Ryzen 5 7600": 130,
-
     # AMD Ryzen 5000
     "Ryzen 9 5950X": 220,
     "Ryzen 9 5900X": 170,
@@ -166,21 +190,18 @@ CPU_VALUES = {
     "Ryzen 7 5700X": 120,
     "Ryzen 5 5600X": 90,
     "Ryzen 5 5600": 85,
-
     # AMD Ryzen 3000
     "Ryzen 9 3900X": 110,
     "Ryzen 7 3800X": 80,
     "Ryzen 7 3700X": 75,
     "Ryzen 5 3600X": 60,
     "Ryzen 5 3600": 55,
-
     # Intel Core Ultra / recent Intel
     "Ultra 9 285K": 420,
     "Ultra 7 265K": 260,
     "Ultra 7 265KF": 245,
     "Ultra 5 245K": 190,
     "Ultra 5 245KF": 175,
-
     # Intel 14th / 13th / 12th gen
     "i9-14900K": 380,
     "i7-14700K": 280,
@@ -192,7 +213,6 @@ CPU_VALUES = {
     "i7-12700": 180,
     "i5-12600K": 140,
     "i5-12400": 100,
-
     # Intel 11th / 10th gen
     "i9-11900K": 150,
     "i7-11700K": 130,
@@ -202,7 +222,6 @@ CPU_VALUES = {
     "i7-10700": 110,
     "i5-10600K": 85,
     "i5-10400": 60,
-
     # Older but common
     "i7-9700K": 100,
     "i7-8700K": 90,
@@ -210,12 +229,10 @@ CPU_VALUES = {
     "i5-9600K": 70,
     "i5-8400": 45,
     "i5-7500": 30,
-
     # Xeon / broad fallbacks
     "Xeon E5": 25,
     "Xeon E3": 20,
     "Xeon": 40,
-
     # Generic fallbacks
     "Ryzen 9": 180,
     "Ryzen 7": 100,
@@ -234,11 +251,10 @@ RAM_VALUES = {
     "96 GB DDR5": 500,
     "64 GB DDR5": 420,
     "48 GB DDR5": 320,
-    "32 GB DDR5": 270,   # user reference
+    "32 GB DDR5": 270,  # user reference
     "24 GB DDR5": 180,
     "16 GB DDR5": 100,
     "8 GB DDR5": 45,
-
     "128 GB DDR4": 180,
     "64 GB DDR4": 95,
     "48 GB DDR4": 75,
@@ -247,17 +263,14 @@ RAM_VALUES = {
     "16 GB DDR4": 28,
     "8 GB DDR4": 10,
     "4 GB DDR4": 5,
-
     "64 GB DDR3": 35,
     "32 GB DDR3": 22,
     "16 GB DDR3": 12,
     "8 GB DDR3": 6,
     "4 GB DDR3": 3,
-
     "16 GB DDR2": 8,
     "8 GB DDR2": 5,
     "4 GB DDR2": 3,
-
     "4 GB DDR1": 3,
     "2 GB DDR1": 2,
     "DDR5": 60,
@@ -265,7 +278,6 @@ RAM_VALUES = {
     "DDR3": 10,
     "DDR2": 5,
     "DDR1": 2,
-
     # Generic non-generation capacities as fallback
     "128 GB RAM": 180,
     "96 GB RAM": 130,
@@ -277,7 +289,6 @@ RAM_VALUES = {
     "12 GB RAM": 20,
     "8 GB RAM": 10,
     "4 GB RAM": 5,
-
     "128GB RAM": 180,
     "96GB RAM": 130,
     "64GB RAM": 95,
@@ -288,7 +299,6 @@ RAM_VALUES = {
     "12GB RAM": 20,
     "8GB RAM": 10,
     "4GB RAM": 5,
-
     "128 GB": 180,
     "96 GB": 130,
     "64 GB": 95,
@@ -395,8 +405,15 @@ def _normalize_gpu_value(value: str) -> str:
         flags=re.IGNORECASE,
     )
     if nvidia_match:
-        prefix = (nvidia_match.group("prefix") or GPU_PREFIX_BY_MODEL[nvidia_match.group("model")]).upper()
-        suffix_tokens = {token.lower() for token in re.findall(r"ti|super", nvidia_match.group("suffix") or "", flags=re.IGNORECASE)}
+        prefix = (
+            nvidia_match.group("prefix") or GPU_PREFIX_BY_MODEL[nvidia_match.group("model")]
+        ).upper()
+        suffix_tokens = {
+            token.lower()
+            for token in re.findall(
+                r"ti|super", nvidia_match.group("suffix") or "", flags=re.IGNORECASE
+            )
+        }
         suffix = ""
         if "ti" in suffix_tokens and "super" in suffix_tokens:
             suffix = " Ti Super"
@@ -467,7 +484,9 @@ def _normalize_ram_value(value: str) -> str:
     if text == "not listed":
         return text
 
-    kit_match = re.search(r"\b(?P<count>\d+)\s*[xX]\s*(?P<size>\d+)\s*GB\b", text, flags=re.IGNORECASE)
+    kit_match = re.search(
+        r"\b(?P<count>\d+)\s*[xX]\s*(?P<size>\d+)\s*GB\b", text, flags=re.IGNORECASE
+    )
     ddr_match = re.search(r"\b(?P<ddr>DDR[1-5])\b", text, flags=re.IGNORECASE)
     if kit_match:
         total_gb = int(kit_match.group("count")) * int(kit_match.group("size"))
@@ -491,7 +510,9 @@ def _normalize_ram_value(value: str) -> str:
     if ddr_then_capacity:
         return f"{ddr_then_capacity.group('size')} GB {ddr_then_capacity.group('ddr').upper()}"
 
-    capacity_only = re.search(r"\b(?P<size>\d+)\s*GB\b(?:\s*(?:RAM|memory))?\b", text, flags=re.IGNORECASE)
+    capacity_only = re.search(
+        r"\b(?P<size>\d+)\s*GB\b(?:\s*(?:RAM|memory))?\b", text, flags=re.IGNORECASE
+    )
     if capacity_only:
         return f"{capacity_only.group('size')} GB RAM"
 
@@ -665,10 +686,7 @@ def calculate_pricing(estimated_value: float) -> tuple[float, float]:
 
 
 def score_deal(
-    asking_price: float,
-    estimated_value: float,
-    specs: ParsedSpecs,
-    distance_miles: float | None
+    asking_price: float, estimated_value: float, specs: ParsedSpecs, distance_miles: float | None
 ) -> tuple[int, float]:
     """
     Score the deal and estimate profit.
@@ -680,12 +698,20 @@ def score_deal(
     :returns: Tuple of score and estimated profit.
     """
     ideal_buy, ideal_sell = calculate_pricing(estimated_value)
-    profit = round(ideal_sell - ideal_buy, 2)
+    try:
+        normalized_asking_price = float(asking_price)
+    except (TypeError, ValueError):
+        normalized_asking_price = 0.0
+
+    if normalized_asking_price < 0:
+        normalized_asking_price = 0.0
+
+    profit = round(ideal_sell - normalized_asking_price, 2)
     score = 0
 
-    if asking_price <= ideal_buy:
+    if normalized_asking_price <= ideal_buy:
         score += 30
-    elif asking_price <= estimated_value * 0.8:
+    elif normalized_asking_price <= estimated_value * 0.8:
         score += 18
 
     if profit >= 250:
@@ -696,9 +722,6 @@ def score_deal(
         score += 15
     elif profit >= 50:
         score += 8
-
-    if "low_knowledge_seller" in specs.flags:
-        score += 15
 
     if "negotiable" in specs.flags:
         score += 8
@@ -725,4 +748,4 @@ def score_deal(
         else:
             score -= 25
 
-    return score, profit
+    return min(max(score, 0), 100), profit

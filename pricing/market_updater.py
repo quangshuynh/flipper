@@ -19,7 +19,7 @@ from typing import Any
 import requests
 
 
-DB_PATH = os.path.join("data", "parts_prices.db")
+DB_PATH = os.path.join("data", "part_prices.db")
 
 PART_QUERIES = [
     "RTX 3060",
@@ -205,9 +205,7 @@ def update_part_price(part_name: str, token: str) -> None:
 
     if sample_size > 0:
         save_price(part_name, market, low, high, sample_size)
-        print(
-            f"{part_name}: market=${market}, low=${low}, high=${high}, n={sample_size}"
-        )
+        print(f"{part_name}: market=${market}, low=${low}, high=${high}, n={sample_size}")
     else:
         print(f"{part_name}: no usable comps found")
 

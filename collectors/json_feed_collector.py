@@ -11,6 +11,7 @@ Useful for:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -18,6 +19,7 @@ from models import Listing
 
 
 DEFAULT_JSON_PATH = Path("data/listings.json")
+logger = logging.getLogger(__name__)
 
 
 def _safe_float(value: Any) -> Optional[float]:
@@ -36,7 +38,7 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
-def _parse_price(raw_price: Any) -> float:
+def _parse_price(raw_price: Any) -> Optional[float]:
     """
     Parse a price value into a float.
 
@@ -50,7 +52,7 @@ def _parse_price(raw_price: Any) -> float:
     :returns: Parsed float price.
     """
     if raw_price is None:
-        return 0.0
+        return None
 
     if isinstance(raw_price, (int, float)):
         return float(raw_price)
@@ -59,7 +61,7 @@ def _parse_price(raw_price: Any) -> float:
     try:
         return float(cleaned)
     except ValueError:
-        return 0.0
+        return None
 
 
 def _build_listing(item: dict[str, Any], index: int) -> Listing:
@@ -81,29 +83,20 @@ def _build_listing(item: dict[str, Any], index: int) -> Listing:
     :param index: Fallback index for generated IDs.
     :returns: Listing object.
     """
-    listing_id = str(
-        item.get("listing_id")
-        or item.get("id")
-        or f"json_{index}"
-    )
+    listing_id = str(item.get("listing_id") or item.get("id") or f"json_{index}")
 
     source = str(item.get("source") or "json_feed")
     title = str(item.get("title") or "Untitled Listing")
     description = str(item.get("description") or "")
     price = _parse_price(item.get("price"))
+    if price is None or price < 0:
+        raise ValueError("listing price must be a non-negative number")
     url = str(item.get("url") or item.get("link") or "")
 
     latitude = _safe_float(item.get("latitude", item.get("lat")))
-    longitude = _safe_float(
-        item.get("longitude", item.get("lon", item.get("lng")))
-    )
+    longitude = _safe_float(item.get("longitude", item.get("lon", item.get("lng"))))
 
-    location_text = str(
-        item.get("location_text")
-        or item.get("location")
-        or item.get("city")
-        or ""
-    )
+    location_text = str(item.get("location_text") or item.get("location") or item.get("city") or "")
 
     return Listing(
         listing_id=listing_id,
@@ -163,6 +156,9 @@ def fetch_listings(json_path: str | Path = DEFAULT_JSON_PATH) -> List[Listing]:
     for i, item in enumerate(raw_listings):
         if not isinstance(item, dict):
             continue
-        listings.append(_build_listing(item, i))
+        try:
+            listings.append(_build_listing(item, i))
+        except ValueError as exc:
+            logger.warning("Skipping malformed listing %s: %s", i, exc)
 
     return listings

@@ -126,7 +126,8 @@ def _clean_component_segment(segment: str) -> str:
     """
     cleaned = re.sub(r"^[\-\*\u2022]\s*", "", segment)
     cleaned = re.sub(
-        r"^(?:gpu|cpu|ram|storage|motherboard|mobo|cpu cooler|cooler|case|psu|power supply|os)\s*:\s*",
+        r"^(?:gpu|cpu|ram|storage|motherboard|mobo|cpu cooler|cooler|case|psu|"
+        r"power supply|os)\s*:\s*",
         "",
         cleaned,
         flags=re.IGNORECASE,
@@ -141,7 +142,9 @@ def _ordered_suffix(suffix_text: str) -> str:
     :param suffix_text: Raw suffix text.
     :returns: Canonical suffix text.
     """
-    suffixes = {token.lower() for token in re.findall(r"ti|super|xtx|xt", suffix_text, re.IGNORECASE)}
+    suffixes = {
+        token.lower() for token in re.findall(r"ti|super|xtx|xt", suffix_text, re.IGNORECASE)
+    }
 
     if "xtx" in suffixes:
         return " XTX"
@@ -266,11 +269,13 @@ def _extract_ram(text: str) -> str:
     ddr_global = ddr_global_match.group(1).upper() if ddr_global_match else None
 
     for segment in segments:
-        kit_match = re.search(r"\b(?P<count>\d+)\s*[xX]\s*(?P<size>\d+)\s*GB\b", segment, flags=re.IGNORECASE)
+        kit_match = re.search(
+            r"\b(?P<count>\d+)\s*[xX]\s*(?P<size>\d+)\s*GB\b", segment, flags=re.IGNORECASE
+        )
         if kit_match:
             total_gb = int(kit_match.group("count")) * int(kit_match.group("size"))
             ddr_match = re.search(r"\b(DDR[1-5])\b", segment, flags=re.IGNORECASE)
-            ddr = (ddr_match.group(1).upper() if ddr_match else ddr_global)
+            ddr = ddr_match.group(1).upper() if ddr_match else ddr_global
             if ddr:
                 return f"{total_gb} GB {ddr}"
             return f"{total_gb} GB RAM"
@@ -445,8 +450,16 @@ def _detect_extras(text: str) -> list[str]:
     found = []
 
     for item, pattern in EXTRA_PATTERNS.items():
-        if re.search(pattern, text, flags=re.IGNORECASE) and item not in found:
-            found.append(item)
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            preceding_text = text[: match.start()]
+            excluded = re.search(
+                r"(?:\bno|\bwithout|\bnot included)[^.!?,]*(?:,?\s+or)?\s*$",
+                preceding_text,
+                flags=re.IGNORECASE,
+            )
+            if not excluded:
+                found.append(item)
+                break
 
     return found
 
@@ -469,7 +482,7 @@ def _detect_flags(text: str) -> list[str]:
     if "firm price" in text_lower:
         flags.append("firm_price")
 
-    if "obo" in text_lower or "best offer" in text_lower:
+    if re.search(r"\bobo\b", text_lower) or "best offer" in text_lower:
         flags.append("negotiable")
 
     return flags

@@ -21,7 +21,10 @@ from dataclasses import asdict
 from typing import Any
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 from models import ParsedSpecs
 
@@ -115,7 +118,8 @@ Your job:
 2. Infer likely specs only when the text strongly supports them.
 3. Never invent details.
 4. If a part is missing, return "not listed".
-5. Detect included extras like monitor, keyboard, mouse, headset, speakers, webcam, mic, desk, chair.
+5. Detect included extras like monitor, keyboard, mouse, headset, speakers, webcam, mic,
+   desk, chair.
 6. Detect seller signals like:
    - low_knowledge_seller
    - negotiable
@@ -170,12 +174,17 @@ def _parse_json_response(text: str) -> dict[str, Any]:
     return json.loads(text)
 
 
-def _get_groq_client() -> OpenAI:
+def _get_groq_client() -> "OpenAI":
     """
-    Create an OpenAI client pointed at Groq's OpenAI-compatible API.
+    create an OpenAI client pointed at Groq's OpenAI-compatible API
 
     :returns: Configured OpenAI client.
     """
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("Optional AI dependency is not installed.") from exc
+
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is missing.")
