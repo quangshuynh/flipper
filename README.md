@@ -83,6 +83,9 @@ configuration:
 ```dotenv
 EBAY_ACCOUNT_DELETION_TOKEN=
 EBAY_ACCOUNT_DELETION_ENDPOINT=https://your-domain.example/api/ebay/account-deletion
+EBAY_NOTIFICATION_ENV=production
+EBAY_CLIENT_ID=
+EBAY_CLIENT_SECRET=
 ```
 
 The token must contain 32-80 letters, numbers, underscores, or hyphens. Generate one without
@@ -118,11 +121,21 @@ select **Marketplace Account Deletion**, save an alert email, and enter the exac
 and the same verification token. Saving triggers a GET challenge. After verification succeeds,
 use **Send Test Notification** and confirm the deployed service returns a success response.
 
-The current POST handler parses and acknowledges notifications but performs no data deletion
-because Flipper does not persist eBay seller, buyer, or order data. It also does not verify the
-`X-EBAY-SIGNATURE` notification signature. Before adding seller/order persistence, implement
-irreversible deletion of all applicable user data and eBay's documented signature verification
-at the explicit processing boundary in `ebay/compliance.py`.
+For each POST, the service Base64-decodes eBay's `X-EBAY-SIGNATURE` envelope, retrieves the
+identified ECC public key through eBay's Notification API using an application OAuth token, and
+verifies the ECDSA/SHA-1 signature before processing or acknowledging the notification. Public
+keys are held in a process-local LRU cache for one hour (up to 100 keys), and application OAuth
+tokens are reused until shortly before expiry. Missing, malformed, or invalid signatures receive
+`412 Precondition Failed`; temporary OAuth or public-key retrieval failures receive a server
+error so eBay can retry. Set `EBAY_CLIENT_ID` and `EBAY_CLIENT_SECRET` to the Production App ID
+and Cert ID through secret configuration only; never commit or print either value. Keep
+`EBAY_NOTIFICATION_ENV=production` for the Production callback. This setting is intentionally
+separate from `EBAY_ENV`, which continues to select the Browse price updater's environment.
+
+The current verified POST processing performs no data deletion because Flipper does not persist
+eBay seller, buyer, or order data. Before adding seller/order persistence, implement irreversible
+deletion of all applicable user data at the explicit processing boundary in
+`ebay/compliance.py`.
 
 ## Tests and CI
 

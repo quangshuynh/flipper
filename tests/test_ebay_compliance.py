@@ -70,14 +70,21 @@ def test_post_rejects_malformed_json():
 
 
 def test_post_acknowledges_valid_notification(monkeypatch):
+    class AcceptingVerifier:
+        def verify(self, _notification, _signature):
+            return True
+
     processed = []
+    monkeypatch.setattr("ebay.compliance._get_signature_verifier", lambda: AcceptingVerifier())
     monkeypatch.setattr("ebay.compliance.process_account_deletion", processed.append)
     notification = {
         "metadata": {"topic": "MARKETPLACE_ACCOUNT_DELETION", "schemaVersion": "1.0"},
         "notification": {"notificationId": "test-notification", "data": {}},
     }
 
-    response = client.post(ACCOUNT_DELETION_PATH, json=notification)
+    response = client.post(
+        ACCOUNT_DELETION_PATH, json=notification, headers={"X-EBAY-SIGNATURE": "valid-shape"}
+    )
 
     assert response.status_code == 204
     assert response.content == b""

@@ -1,12 +1,21 @@
 """HTTP receiver for eBay marketplace account deletion notifications."""
 
 import hashlib
+import json
 import os
 import re
 from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from starlette.concurrency import run_in_threadpool
+
+from ebay.signature_verifier import (
+    EbaySignatureVerifier,
+    PublicKeyRetrievalError,
+    SignatureFormatError,
+    build_signature_verifier,
+)
 
 
 ACCOUNT_DELETION_PATH = "/api/ebay/account-deletion"
@@ -16,6 +25,7 @@ app = FastAPI(
     title="Flipper eBay Compliance",
     description="Receives eBay marketplace account deletion/closure notifications.",
 )
+_signature_verifier: EbaySignatureVerifier | None = None
 
 
 def create_challenge_response(challenge_code: str, verification_token: str, endpoint: str) -> str:
@@ -64,6 +74,17 @@ def process_account_deletion(_notification: dict[str, Any]) -> None:
     """
 
 
+def _get_signature_verifier() -> EbaySignatureVerifier:
+    """Create one process-local verifier so its bounded public-key cache is reused."""
+    global _signature_verifier
+    if _signature_verifier is None:
+        try:
+            _signature_verifier = build_signature_verifier()
+        except ValueError as exc:
+            raise PublicKeyRetrievalError("eBay signature verification is not configured") from exc
+    return _signature_verifier
+
+
 @app.get(ACCOUNT_DELETION_PATH)
 def verify_account_deletion_endpoint(
     challenge_code: str = Query(..., min_length=1),
@@ -77,10 +98,11 @@ def verify_account_deletion_endpoint(
 
 @app.post(ACCOUNT_DELETION_PATH, status_code=status.HTTP_204_NO_CONTENT)
 async def receive_account_deletion_notification(request: Request) -> Response:
-    """Acknowledge a syntactically valid eBay account deletion notification."""
+    """Verify, process, and then acknowledge an eBay deletion notification."""
+    raw_body = await request.body()
     try:
-        notification = await request.json()
-    except (UnicodeDecodeError, ValueError) as exc:
+        notification = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request body must be valid JSON",
@@ -90,6 +112,32 @@ async def receive_account_deletion_notification(request: Request) -> Response:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Notification must be a JSON object",
+        )
+
+    signature_header = request.headers.get("X-EBAY-SIGNATURE")
+    if not signature_header:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="X-EBAY-SIGNATURE header is required",
+        )
+    try:
+        verified = await run_in_threadpool(
+            _get_signature_verifier().verify, notification, signature_header
+        )
+    except SignatureFormatError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="eBay notification signature is invalid",
+        ) from exc
+    except PublicKeyRetrievalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="eBay notification signature verification is unavailable",
+        ) from exc
+    if not verified:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="eBay notification signature is invalid",
         )
 
     process_account_deletion(notification)
