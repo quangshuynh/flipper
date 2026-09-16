@@ -104,3 +104,56 @@ def test_simulated_fast_client_clock_keeps_now_boundary_behind_clock():
 def test_naive_clock_is_rejected_instead_of_assumed_utc():
     with pytest.raises(ValueError, match="timezone-aware"):
         main._order_date_range(None, None, clock=lambda: datetime(2026, 9, 16, 12, 0))
+
+
+def test_reconcile_output_summary_and_date_range_reuse(monkeypatch, tmp_path, capsys):
+    database = tmp_path / "inventory.db"
+    main.InventoryStore(database).add(
+        title="Sony Camera",
+        source="sale",
+        acquired_at="2026-09-01",
+        acquisition_cost="20",
+        marketplace="eBay",
+        marketplace_sku="CAM-1",
+    )
+    matched = order()
+    matched = EbayOrder(
+        **{
+            **matched.__dict__,
+            "line_items": (EbayOrderLineItem("1", "2", "Sony Camera", "CAM-1", 1, None),),
+        }
+    )
+    captured = {}
+    monkeypatch.setattr(main, "_seller_oauth", lambda: OAuth())
+
+    def get_orders(self, start, end):
+        captured["range"] = (start, end)
+        return [matched]
+
+    monkeypatch.setattr(main.FulfillmentClient, "get_orders", get_orders)
+    assert (
+        main.main(
+            [
+                "ebay",
+                "reconcile",
+                "--from",
+                "2026-09-01",
+                "--to",
+                "2026-09-15",
+                "--database",
+                str(database),
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "Q0001 | Sony Camera" in output
+    assert "eBay order: 12-34567-89012" in output
+    assert "SKU: CAM-1" in output
+    assert "Match: matched" in output
+    assert "Summary: 1 examined | 1 matched | 0 unmatched | 0 missing SKU | 0 ambiguous" in output
+    assert captured["range"] == (
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 23, 59, 59, 999000, tzinfo=timezone.utc),
+    )
+    assert "buyer" not in output.lower()

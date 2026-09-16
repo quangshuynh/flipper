@@ -172,10 +172,19 @@ not infer historical events.
 
 An item can optionally retain marketplace linkage by using `inventory update` after creation.
 
-Marketplace item IDs and SKUs are references for future reconciliation. SKU linkage does not mean
-an item sold, and inventory is not yet automatically reconciled with eBay orders. Flipper keeps the
-local inventory record authoritative, does not persist order responses, and does not store buyer
-names, contact details, or addresses.
+Marketplace item IDs and SKUs can be compared with read-only eBay order lines:
+
+```bash
+python main.py ebay reconcile
+python main.py ebay reconcile --from 2026-09-01 --to 2026-09-30
+```
+
+Reconciliation uses an exact SKU/custom-label match scoped to the eBay marketplace. Marketplace +
+SKU pairs are unique in inventory; marketplace names are compared case-insensitively, while SKU
+values remain case-sensitive. Missing, unmatched, and ambiguous lines are reported without guessing
+from titles, prices, or buyer data. The command does not persist orders, change inventory status,
+set lifecycle timestamps, or mark anything sold. Flipper keeps local inventory authoritative and
+does not store buyer names, contact details, or addresses.
 
 ## eBay account deletion notifications
 

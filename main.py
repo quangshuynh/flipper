@@ -14,10 +14,12 @@ from dotenv import load_dotenv
 from collectors.json_feed_collector import fetch_listings
 from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
 from ebay.orders import EbayOrder, Money
+from ebay.reconciliation import ReconciliationStatus, reconcile_ebay_orders, summarize
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from inventory.store import (
     VALID_STATUSES,
     InventoryNotFoundError,
+    InventoryRecord,
     InventoryStore,
     InventoryValidationError,
 )
@@ -174,6 +176,36 @@ def _print_orders(orders: list[EbayOrder]) -> None:
         print(f"Order: {order.order_id}")
 
 
+def _print_reconciliation(orders: list[EbayOrder], inventory: list[InventoryRecord]) -> None:
+    results = reconcile_ebay_orders(orders, inventory)
+    print("eBay Inventory Reconciliation")
+    for result in results:
+        line = result.line_item
+        print("")
+        if result.status is ReconciliationStatus.MATCHED:
+            record = result.inventory_matches[0]
+            print(f"{record.inventory_id} | {record.title}")
+        else:
+            print(line.title)
+        print(f"eBay order: {result.order_id}")
+        print(f"SKU: {line.sku or 'not provided'}")
+        print(f"Match: {result.status.value.replace('_', ' ')}")
+        if result.status is ReconciliationStatus.AMBIGUOUS:
+            identifiers = ", ".join(record.inventory_id for record in result.inventory_matches)
+            print(f"Local inventory candidates: {identifiers}")
+        if line.legacy_item_id:
+            print(f"eBay item ID: {line.legacy_item_id}")
+
+    summary = summarize(results)
+    print("")
+    print(
+        "Summary: "
+        f"{summary.examined} examined | {summary.matched} matched | "
+        f"{summary.unmatched} unmatched | {summary.missing_sku} missing SKU | "
+        f"{summary.ambiguous} ambiguous"
+    )
+
+
 def _parse_date(value: str) -> datetime:
     try:
         parsed = datetime.strptime(value, "%Y-%m-%d")
@@ -228,6 +260,12 @@ def build_parser() -> argparse.ArgumentParser:
     orders = ebay_commands.add_parser("orders", help="show recent seller orders")
     orders.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
     orders.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
+    reconcile = ebay_commands.add_parser(
+        "reconcile", help="match seller order lines to local inventory"
+    )
+    reconcile.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
+    reconcile.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
+    reconcile.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory = commands.add_parser("inventory", help="manage local inventory")
     inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory_commands = inventory.add_subparsers(dest="inventory_command", required=True)
@@ -369,9 +407,12 @@ def run_ebay_command(args: argparse.Namespace) -> int:
         if end - start > timedelta(days=730):
             raise SellerOAuthError("Order date range cannot exceed eBay's two-year history window")
         orders = FulfillmentClient(oauth).get_orders(start, end)
-        _print_orders(orders)
+        if args.ebay_command == "reconcile":
+            _print_reconciliation(orders, InventoryStore(args.database).list())
+        else:
+            _print_orders(orders)
         return 0
-    except (SellerOAuthError, FulfillmentApiError, ValueError) as exc:
+    except (SellerOAuthError, FulfillmentApiError, ValueError, RuntimeError, sqlite3.Error) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
