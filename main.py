@@ -19,18 +19,22 @@ from ebay.reconciliation import ReconciliationStatus, reconcile_ebay_orders, sum
 from ebay.sale_import import SaleImportStatus, import_ebay_sales
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from inventory.store import (
+    SALE_COST_TYPES,
     VALID_STATUSES,
     InventoryNotFoundError,
     InventoryRecord,
     InventoryStore,
     InventoryValidationError,
     SaleNotFoundError,
+    SaleCostNotFoundError,
+    SaleCostValidationError,
 )
 from models import DealEvaluation
 from parser.ai_enricher import enrich_specs_with_ai
 from notifier.discord_notifier import send_deal_to_discord
 from parser.extractor import extract_specs
 from pricing.estimator import calculate_pricing_result, estimate_market_value, score_deal
+from sales.economics import EconomicComponent, calculate_sale_economics
 from utils.dedupe import init_db, has_seen, mark_seen
 from utils.distance import compute_distance_miles
 
@@ -211,7 +215,8 @@ def _print_reconciliation(orders: list[EbayOrder], inventory: list[InventoryReco
 
 def _format_sale_money(amount: int, scale: int, currency: str) -> str:
     value = Decimal(amount).scaleb(-scale)
-    return f"{currency} {value:.{scale}f}"
+    display_scale = max(2, scale)
+    return f"{currency} {value:.{display_scale}f}"
 
 
 def _print_sale_import(orders: list[EbayOrder], store: InventoryStore) -> bool:
@@ -351,6 +356,16 @@ def build_parser() -> argparse.ArgumentParser:
     sales_commands.add_parser("list", help="list imported sales")
     sale_show = sales_commands.add_parser("show", help="show one imported sale")
     sale_show.add_argument("sale_id")
+    add_cost = sales_commands.add_parser(
+        "add-cost", help="record a manual cost or reducing adjustment"
+    )
+    add_cost.add_argument("sale_id")
+    add_cost.add_argument("--type", dest="category", choices=SALE_COST_TYPES, required=True)
+    add_cost.add_argument("--amount", type=Decimal, required=True)
+    add_cost.add_argument("--currency", help="defaults to the sale currency")
+    add_cost.add_argument("--note", default="")
+    remove_cost = sales_commands.add_parser("remove-cost", help="remove an erroneous cost entry")
+    remove_cost.add_argument("cost_id")
     return parser
 
 
@@ -478,6 +493,24 @@ def run_ebay_command(args: argparse.Namespace) -> int:
 def run_sales_command(args: argparse.Namespace) -> int:
     store = InventoryStore(args.database)
     try:
+        if args.sales_command == "add-cost":
+            cost = store.add_sale_cost(
+                args.sale_id,
+                category=args.category,
+                amount=args.amount,
+                currency=args.currency,
+                note=args.note,
+            )
+            print(
+                f"Recorded {cost.cost_id} for {cost.sale_id}: {cost.category} "
+                f"{_format_sale_money(cost.amount_minor, cost.amount_scale, cost.currency)} "
+                f"(source: {cost.source})"
+            )
+            return 0
+        if args.sales_command == "remove-cost":
+            cost = store.remove_sale_cost(args.cost_id)
+            print(f"Removed {cost.cost_id} from {cost.sale_id}")
+            return 0
         if args.sales_command == "list":
             sales = store.list_sales()
             if not sales:
@@ -504,8 +537,53 @@ def run_sales_command(args: argparse.Namespace) -> int:
         print(f"  Gross: {gross}")
         print(f"  Sold at: {sale.sold_at}")
         print(f"  Imported at: {sale.imported_at}")
+        costs = store.list_sale_costs(sale.sale_id)
+        print("Economics (recorded local data)")
+        print(f"  Gross sale: {gross}")
+        inventory = store.get(sale.inventory_id)
+        if sale.currency != "USD":
+            print("  Recorded profit: unavailable")
+            print(
+                "  Reason: acquisition cost is stored in USD and currency conversion "
+                "is not supported"
+            )
+        else:
+            economics = calculate_sale_economics(
+                gross=sale.gross_amount,
+                acquisition_cost=inventory.acquisition_cost,
+                currency=sale.currency,
+                acquisition_currency="USD",
+                components=[
+                    EconomicComponent(cost.category, cost.amount, cost.currency) for cost in costs
+                ],
+            )
+            labels = {
+                "marketplace_fee": "Marketplace fees",
+                "shipping_cost": "Shipping",
+                "refund": "Refunds",
+                "other_adjustment": "Other adjustments",
+            }
+            print(f"  Acquisition cost: -USD {economics.acquisition_cost:.2f}")
+            for category in SALE_COST_TYPES:
+                amount = economics.components_by_category.get(category, Decimal(0))
+                print(f"  {labels[category]}: -USD {amount:.2f}")
+            print(f"  Recorded realized profit: USD {economics.recorded_profit:.2f}")
+            print("  Reconciliation: incomplete; manual costs are not verified by eBay")
+        print("Cost components")
+        if not costs:
+            print("  None recorded (this does not mean zero costs)")
+        for cost in costs:
+            amount = _format_sale_money(cost.amount_minor, cost.amount_scale, cost.currency)
+            note = f" | {cost.note}" if cost.note else ""
+            print(f"  {cost.cost_id} | {cost.category} | -{amount} | source: {cost.source}{note}")
         return 0
-    except (SaleNotFoundError, RuntimeError, sqlite3.Error) as exc:
+    except (
+        SaleNotFoundError,
+        SaleCostNotFoundError,
+        SaleCostValidationError,
+        RuntimeError,
+        sqlite3.Error,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
