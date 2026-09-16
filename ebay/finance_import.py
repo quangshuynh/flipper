@@ -65,6 +65,8 @@ class _Candidate:
     currency: str
     component_key: str
     note: str
+    effect: str = "reduce"
+    reversal_of_key: str | None = None
 
 
 def _candidates(
@@ -85,7 +87,29 @@ def _candidates(
                 "eBay buyer refund",
             )
         ]
-    if transaction.classification is not TransactionClassification.SALE:
+    if transaction.classification is TransactionClassification.SHIPPING_LABEL:
+        if transaction.amount.value == 0 or transaction.booking_entry not in {"DEBIT", "CREDIT"}:
+            return []
+        is_credit = transaction.booking_entry == "CREDIT"
+        return [
+            _Candidate(
+                "shipping_cost",
+                abs(transaction.amount.value),
+                transaction.amount.currency,
+                f"shipping-label:{transaction.transaction_id}",
+                "eBay shipping label credit" if is_credit else "eBay shipping label purchase",
+                "increase" if is_credit else "reduce",
+                "shipping-label" if is_credit else None,
+            )
+        ]
+    if transaction.classification not in {
+        TransactionClassification.SALE,
+        TransactionClassification.CREDIT,
+    }:
+        return []
+
+    is_credit = transaction.classification is TransactionClassification.CREDIT
+    if is_credit and transaction.booking_entry != "CREDIT":
         return []
 
     totals: dict[tuple[str, str, str], Decimal] = {}
@@ -102,8 +126,10 @@ def _candidates(
             "marketplace_fee",
             amount,
             currency,
-            f"fee:{line_id}:{fee_type}",
-            f"eBay {fee_type}",
+            f"fee-credit:{line_id}:{fee_type}" if is_credit else f"fee:{line_id}:{fee_type}",
+            f"eBay {fee_type} credit" if is_credit else f"eBay {fee_type}",
+            "increase" if is_credit else "reduce",
+            f"fee:{line_id}:{fee_type}" if is_credit else None,
         )
         for (line_id, fee_type, currency), amount in sorted(totals.items())
         if amount != 0
@@ -148,6 +174,63 @@ def import_finance_transactions(
             )
             continue
         for candidate in candidates:
+            related_cost_id = None
+            if candidate.reversal_of_key is not None:
+                existing_credit = next(
+                    (
+                        cost
+                        for cost in store.list_sale_costs(sale.sale_id)
+                        if cost.source == "ebay_finances"
+                        and cost.external_transaction_id == match.transaction.transaction_id
+                        and cost.external_component_key == candidate.component_key
+                    ),
+                    None,
+                )
+                if existing_credit is not None:
+                    related_cost_id = existing_credit.related_cost_id
+                    target = (
+                        store.get_sale_cost(related_cost_id)
+                        if related_cost_id is not None
+                        else None
+                    )
+                else:
+                    target = None
+                target_key = candidate.reversal_of_key
+                if target is None and target_key == "shipping-label":
+                    targets = [
+                        cost
+                        for cost in store.list_sale_costs(sale.sale_id)
+                        if cost.source == "ebay_finances"
+                        and cost.effect == "reduce"
+                        and cost.category == "shipping_cost"
+                        and cost.external_component_key is not None
+                        and cost.external_component_key.startswith("shipping-label:")
+                    ]
+                    reversed_ids = {
+                        cost.related_cost_id
+                        for cost in store.list_sale_costs(sale.sale_id)
+                        if cost.effect == "increase"
+                    }
+                    targets = [cost for cost in targets if cost.cost_id not in reversed_ids]
+                    target = targets[0] if len(targets) == 1 else None
+                elif target is None:
+                    target = store.find_imported_reversal_target(
+                        sale.sale_id,
+                        category=candidate.category,
+                        external_component_key=target_key,
+                    )
+                if target is None:
+                    results.append(
+                        FinanceImportResult(
+                            match.transaction.transaction_id,
+                            FinanceImportStatus.UNSUPPORTED,
+                            sale,
+                            candidate.category,
+                            detail="credit has no unique unreversed imported component",
+                        )
+                    )
+                    continue
+                related_cost_id = target.cost_id
             try:
                 cost, created = store.import_ebay_finances_cost(
                     sale.sale_id,
@@ -157,6 +240,8 @@ def import_finance_transactions(
                     external_transaction_id=match.transaction.transaction_id,
                     external_component_key=candidate.component_key,
                     note=candidate.note,
+                    effect=candidate.effect,
+                    related_cost_id=related_cost_id,
                 )
             except SaleCostConflictError as exc:
                 results.append(

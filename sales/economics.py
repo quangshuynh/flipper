@@ -8,11 +8,12 @@ from decimal import Decimal
 
 @dataclass(frozen=True)
 class EconomicComponent:
-    """A nonnegative amount that reduces sale proceeds."""
+    """A nonnegative amount with an explicit effect on sale proceeds."""
 
     category: str
     amount: Decimal
     currency: str
+    effect: str = "reduce"
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class SaleEconomics:
     gross: Decimal
     acquisition_cost: Decimal
     components_by_category: dict[str, Decimal]
+    increasing_by_category: dict[str, Decimal]
     recorded_profit: Decimal
     currency: str
 
@@ -36,8 +38,7 @@ def calculate_sale_economics(
 ) -> SaleEconomics:
     """Calculate recorded profit without conversion or completeness claims.
 
-    Every component category currently has reducing semantics. Amounts are
-    nonnegative, avoiding ambiguous double negatives.
+    Amounts are nonnegative; effect carries the sign to avoid double negatives.
     """
     if currency != acquisition_currency:
         raise ValueError(
@@ -45,6 +46,7 @@ def calculate_sale_economics(
             f"{acquisition_currency}; currency conversion is not supported"
         )
     totals: dict[str, Decimal] = {}
+    increases: dict[str, Decimal] = {}
     for component in components:
         if component.currency != currency:
             raise ValueError(
@@ -52,6 +54,14 @@ def calculate_sale_economics(
             )
         if not component.amount.is_finite() or component.amount < 0:
             raise ValueError("component amounts must be finite and nonnegative")
-        totals[component.category] = totals.get(component.category, Decimal(0)) + component.amount
-    recorded_profit = gross - acquisition_cost - sum(totals.values(), Decimal(0))
-    return SaleEconomics(gross, acquisition_cost, totals, recorded_profit, currency)
+        if component.effect not in {"reduce", "increase"}:
+            raise ValueError("component effect must be reduce or increase")
+        target = totals if component.effect == "reduce" else increases
+        target[component.category] = target.get(component.category, Decimal(0)) + component.amount
+    recorded_profit = (
+        gross
+        - acquisition_cost
+        - sum(totals.values(), Decimal(0))
+        + sum(increases.values(), Decimal(0))
+    )
+    return SaleEconomics(gross, acquisition_cost, totals, increases, recorded_profit, currency)

@@ -27,6 +27,7 @@ from ebay.sale_import import SaleImportStatus, import_ebay_sales
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from inventory.store import (
     SALE_COST_TYPES,
+    RECONCILIATION_CATEGORIES,
     VALID_STATUSES,
     InventoryNotFoundError,
     InventoryRecord,
@@ -455,8 +456,19 @@ def build_parser() -> argparse.ArgumentParser:
     add_cost.add_argument("--amount", type=Decimal, required=True)
     add_cost.add_argument("--currency", help="defaults to the sale currency")
     add_cost.add_argument("--note", default="")
+    add_cost.add_argument("--effect", choices=("reduce", "increase"), default="reduce")
     remove_cost = sales_commands.add_parser("remove-cost", help="remove an erroneous cost entry")
     remove_cost.add_argument("cost_id")
+    confirm = sales_commands.add_parser(
+        "confirm", help="confirm an economics category is complete, including zero/not applicable"
+    )
+    confirm.add_argument("sale_id")
+    confirm.add_argument("--category", choices=RECONCILIATION_CATEGORIES, required=True)
+    unconfirm = sales_commands.add_parser(
+        "unconfirm", help="reset a mistaken reconciliation confirmation"
+    )
+    unconfirm.add_argument("sale_id")
+    unconfirm.add_argument("--category", choices=RECONCILIATION_CATEGORIES, required=True)
     return parser
 
 
@@ -608,12 +620,19 @@ def run_sales_command(args: argparse.Namespace) -> int:
                 amount=args.amount,
                 currency=args.currency,
                 note=args.note,
+                effect=args.effect,
             )
             print(
                 f"Recorded {cost.cost_id} for {cost.sale_id}: {cost.category} "
                 f"{_format_sale_money(cost.amount_minor, cost.amount_scale, cost.currency)} "
                 f"(source: {cost.source})"
             )
+            return 0
+        if args.sales_command in {"confirm", "unconfirm"}:
+            confirmed = args.sales_command == "confirm"
+            store.set_reconciliation_confirmation(args.sale_id, args.category, confirmed=confirmed)
+            action = "Confirmed" if confirmed else "Reset"
+            print(f"{action} {args.category} reconciliation for {args.sale_id.upper()}")
             return 0
         if args.sales_command == "remove-cost":
             cost = store.remove_sale_cost(args.cost_id)
@@ -662,7 +681,8 @@ def run_sales_command(args: argparse.Namespace) -> int:
                 currency=sale.currency,
                 acquisition_currency="USD",
                 components=[
-                    EconomicComponent(cost.category, cost.amount, cost.currency) for cost in costs
+                    EconomicComponent(cost.category, cost.amount, cost.currency, cost.effect)
+                    for cost in costs
                 ],
             )
             labels = {
@@ -675,8 +695,12 @@ def run_sales_command(args: argparse.Namespace) -> int:
             for category in SALE_COST_TYPES:
                 amount = economics.components_by_category.get(category, Decimal(0))
                 print(f"  {labels[category]}: -USD {amount:.2f}")
+            for category, amount in economics.increasing_by_category.items():
+                print(f"  {labels[category]} credits: +USD {amount:.2f}")
             print(f"  Recorded realized profit: USD {economics.recorded_profit:.2f}")
-            print("  Reconciliation: incomplete; unrecorded costs or credits may remain")
+        status, missing = store.reconciliation_status(sale.sale_id)
+        print(f"  Reconciliation: {status}")
+        print(f"  Missing/unconfirmed: {', '.join(missing) if missing else 'none'}")
         print("Cost components")
         if not costs:
             print("  None recorded (this does not mean zero costs)")
@@ -688,9 +712,11 @@ def run_sales_command(args: argparse.Namespace) -> int:
                 if cost.external_transaction_id
                 else ""
             )
+            sign = "-" if cost.effect == "reduce" else "+"
+            related = f" | reverses: {cost.related_cost_id}" if cost.related_cost_id else ""
             print(
-                f"  {cost.cost_id} | {cost.category} | -{amount} | "
-                f"source: {cost.source}{external}{note}"
+                f"  {cost.cost_id} | {cost.category} | {sign}{amount} | "
+                f"source: {cost.source}{external}{related}{note}"
             )
         return 0
     except (

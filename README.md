@@ -167,14 +167,17 @@ reconciliation as the read-only view. It imports only these deterministically ma
 
 - documented order-line selling fees (`FINAL_VALUE_FEE`, fixed-per-order and shipping variants,
   below-standard and high-item-not-as-described variants, international, payment-processing,
-  advertising, premium-ad, and regulatory-operating fees) as `marketplace_fee`; and
-- a native `REFUND` with `bookingEntry=DEBIT` as `refund`.
+  advertising, premium-ad, and regulatory-operating fees) as `marketplace_fee`;
+- a native `REFUND` with `bookingEntry=DEBIT` as `refund`;
+- a `SHIPPING_LABEL` debit exactly attributable to one sale as seller-paid `shipping_cost`; and
+- a credit containing a supported fee, or a shipping-label credit, only when it links to one
+  unique, unreversed, previously imported component for that sale.
 
-Native `SALE` gross amounts are not costs and are never imported. Credits and fee credits,
-payouts/transfers, disputes, shipping-label transactions, taxes, purchases, withdrawals,
-non-sale charges, donations, listing/subscription fees, opaque `OTHER_FEES`, adjustments, unknown
-types, amount-less fees, and zero-value components remain unsupported. Flipper does not guess at
-their economics, infer seller shipping expense from buyer-paid shipping, or convert currencies.
+Native `SALE` gross amounts, including buyer-paid shipping revenue, are not seller expenses and are
+never imported as costs. Unlinked or ambiguous credits, payouts/transfers, disputes, taxes,
+purchases, withdrawals, non-sale charges, donations, listing/subscription fees, opaque
+`OTHER_FEES`, generic adjustments, unknown types, amount-less fees, and zero-value components
+remain unsupported. Flipper does not guess at their economics or convert currencies.
 
 Each imported component has `source=ebay_finances` plus a non-sensitive eBay transaction ID and a
 deterministic component key. A database uniqueness constraint makes identical re-imports no-ops;
@@ -274,24 +277,34 @@ components:
 python main.py sales add-cost S000001 --type marketplace_fee --amount 10.44
 python main.py sales add-cost S000001 --type shipping_cost --amount 7.25
 python main.py sales add-cost S000001 --type refund --amount 5.00 --note "partial refund"
+python main.py sales add-cost S000001 --type other_adjustment --amount 2.00 --effect increase
+python main.py sales confirm S000001 --category shipping
 python main.py sales show S000001
 python main.py sales remove-cost C000001
+python main.py sales unconfirm S000001 --category shipping
 ```
 
-Component amounts are always nonnegative; every currently supported type reduces proceeds. This
-avoids double-negative entries. Each component has a stable local C-number, sale link, exact scaled
-integer amount, currency, source, optional note, and creation time. CLI entries are marked
+Component amounts are always nonnegative and carry an explicit `reduce` or `increase` effect, which
+avoids double negatives. Existing components migrate as reducing entries. Each component has a
+stable local C-number, sale link, exact scaled integer amount, currency, source, optional note, and
+creation time. CLI entries are marked
 `source=manual`; they are not verified against eBay. Removing a mistaken component does not reuse
 its C-number. Finances-imported components instead show `source=ebay_finances` and their eBay
-transaction ID; manual and imported components remain independent even when their amounts match.
+transaction ID; imported credits also preserve the C-number relationship to the component they
+reverse. Manual and imported components remain independent even when their amounts match, and
+Finances-derived history remains protected from manual removal.
 
-The displayed recorded realized profit is gross sale amount minus acquisition cost and all recorded
-components. No stored profit total is cached or mutated. A missing fee, shipping, or refund entry
-means only that no such cost has been recorded—not that the true cost was zero—so the display marks
-the result as incompletely reconciled. Acquisition cost is currently USD; Flipper will not calculate
-profit for a sale in another currency and never performs currency conversion. Importing some eBay
-fees or refunds does not prove completeness: seller-paid shipping, unsupported credits or reversals,
-and other costs can still be absent. Payout accounting and full reconciliation remain deferred.
+The displayed recorded realized profit is gross sale plus increasing adjustments, minus acquisition
+cost and reducing components. No profit total is cached. Reconciliation separately tracks four
+explicitly confirmed categories: fees, seller-paid shipping, refunds, and other adjustments. With no
+confirmations a sale is `incomplete`; with some it is `partially_reconciled`; only all four produce
+`fully_reconciled`. A component is evidence of an amount, not evidence that its category is complete.
+Use `sales confirm` after reviewing a category, including when it is verified zero/not applicable;
+use `sales unconfirm` to correct a mistake. Missing/unconfirmed is never silently treated as zero.
+
+Acquisition cost is currently USD; Flipper will not calculate profit for another currency and never
+performs conversion. This completeness model covers sale economics only. Payout-to-bank settlement
+and reconciliation remain deliberately deferred.
 
 ## eBay account deletion notifications
 

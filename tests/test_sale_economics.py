@@ -88,10 +88,14 @@ def test_v4_migration_preserves_sale_and_starts_with_zero_components(tmp_path):
         connection.execute("DROP TRIGGER sale_cost_currency_matches_sale")
         connection.execute("DROP TRIGGER sale_cost_external_identity_insert")
         connection.execute("DROP TRIGGER sale_cost_external_identity_update")
+        connection.execute("DROP TRIGGER sale_cost_relationship_insert")
         connection.execute("DROP INDEX sale_costs_external_identity")
+        connection.execute("DROP INDEX sale_costs_one_external_reversal")
+        connection.execute("DROP TABLE sale_reconciliation_confirmations")
         connection.execute("DROP TABLE sale_costs")
         connection.execute("DROP TABLE sale_cost_id_sequence")
         connection.execute("DELETE FROM schema_migrations WHERE version = 6")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 7")
         connection.execute("DELETE FROM schema_migrations WHERE version = 5")
 
     store.initialize()
@@ -101,7 +105,7 @@ def test_v4_migration_preserves_sale_and_starts_with_zero_components(tmp_path):
     with sqlite3.connect(store.path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
 
 
 @pytest.mark.parametrize(
@@ -186,7 +190,7 @@ def test_cli_add_show_and_remove_cost(tmp_path, capsys):
     assert "Shipping: -USD 7.25" in shown
     assert "Refunds: -USD 0.00" in shown
     assert "Recorded realized profit: USD 39.31" in shown
-    assert "unrecorded costs or credits may remain" in shown
+    assert "Reconciliation: incomplete" in shown
     assert main.main([*base, "remove-cost", "C000001"]) == 0
     assert "Removed C000001" in capsys.readouterr().out
 
@@ -198,3 +202,46 @@ def test_show_non_usd_sale_does_not_claim_profit(tmp_path, capsys):
     shown = capsys.readouterr().out
     assert "Recorded profit: unavailable" in shown
     assert "Recorded realized profit" not in shown
+
+
+def test_manual_increasing_adjustment_and_reconciliation_correction(tmp_path, capsys):
+    database = tmp_path / "inventory.db"
+    store = InventoryStore(database)
+    sold_inventory(store)
+    credit = store.add_sale_cost(
+        "S000001", category="other_adjustment", amount=Decimal("2.50"), effect="increase"
+    )
+    assert credit.amount == Decimal("2.5")
+    assert credit.effect == "increase"
+    assert store.reconciliation_status("S000001") == (
+        "incomplete",
+        ("fees", "shipping", "refunds", "adjustments"),
+    )
+    base = ["sales", "--database", str(database)]
+    for category in ("fees", "shipping", "refunds", "adjustments"):
+        assert main.main([*base, "confirm", "S000001", "--category", category]) == 0
+    assert store.reconciliation_status("S000001") == ("fully_reconciled", ())
+    assert main.main([*base, "unconfirm", "S000001", "--category", "shipping"]) == 0
+    assert store.reconciliation_status("S000001") == ("partially_reconciled", ("shipping",))
+    capsys.readouterr()
+    assert main.main([*base, "show", "S000001"]) == 0
+    shown = capsys.readouterr().out
+    assert "Other adjustments credits: +USD 2.50" in shown
+    assert "Missing/unconfirmed: shipping" in shown
+
+
+def test_v6_migration_preserves_reducing_economics_without_inventing_confirmation(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    sold_inventory(store)
+    old = store.add_sale_cost("S000001", category="shipping_cost", amount=Decimal("3.25"))
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TRIGGER sale_cost_relationship_insert")
+        connection.execute("DROP INDEX sale_costs_one_external_reversal")
+        connection.execute("DROP TABLE sale_reconciliation_confirmations")
+        connection.execute("ALTER TABLE sale_costs DROP COLUMN related_cost_internal_id")
+        connection.execute("ALTER TABLE sale_costs DROP COLUMN effect")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 7")
+    migrated = store.get_sale_cost(old.cost_id)
+    assert migrated.effect == "reduce"
+    assert migrated.related_cost_id is None
+    assert store.reconciliation_status("S000001")[0] == "incomplete"
