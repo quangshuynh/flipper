@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -137,6 +138,35 @@ def test_pagination_uses_offset_until_total():
     assert session.calls[1][1]["params"]["offset"] == 1
 
 
+def test_production_request_parameters_and_encoding_are_exact():
+    session = Session([Response(body={"orders": [], "total": 0})])
+    start = datetime(2026, 8, 17, 12, 34, 56, 789123, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 16, 12, 34, 56, 789123, tzinfo=timezone.utc)
+    FulfillmentClient(OAuth(), session=session).get_orders(start, end)
+
+    url, kwargs = session.calls[0]
+    assert url == "https://api.ebay.com/sell/fulfillment/v1/order"
+    assert kwargs["params"] == {
+        "filter": "creationdate:[2026-08-17T12:34:56.789Z..2026-09-16T12:34:56.789Z]",
+        "limit": 100,
+        "offset": 0,
+    }
+    prepared = __import__("requests").Request("GET", url, params=kwargs["params"]).prepare()
+    assert "%5B" in prepared.url and "%5D" in prepared.url
+    assert parse_qs(urlsplit(prepared.url).query)["filter"] == [kwargs["params"]["filter"]]
+
+
+def test_timestamp_converts_non_utc_zone_and_keeps_milliseconds():
+    eastern = timezone(timedelta(hours=-4))
+    value = datetime(2026, 9, 16, 8, 34, 56, 789999, tzinfo=eastern)
+    assert FulfillmentClient._timestamp(value) == "2026-09-16T12:34:56.789Z"
+
+
+def test_timestamp_rejects_naive_datetime_instead_of_appending_utc():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        FulfillmentClient._timestamp(datetime(2026, 9, 16, 12, 0))
+
+
 @pytest.mark.parametrize(
     "response,error",
     [
@@ -149,6 +179,30 @@ def test_pagination_uses_offset_until_total():
 def test_api_errors(response, error):
     with pytest.raises(error):
         FulfillmentClient(OAuth(), session=Session([response])).get_orders(*dates())
+
+
+def test_api_error_reports_safe_structured_fields_only():
+    body = {
+        "errors": [
+            {
+                "errorId": 30850,
+                "domain": "API_FULFILLMENT",
+                "category": "REQUEST",
+                "message": "Invalid date range",
+                "longMessage": "Start and end dates cannot be in the future",
+                "parameters": [{"name": "filter", "value": "buyer@example.com"}],
+            }
+        ],
+        "access_token": "access-secret",
+        "buyer": {"email": "buyer@example.com"},
+    }
+    with pytest.raises(FulfillmentApiError) as raised:
+        FulfillmentClient(OAuth(), session=Session([Response(400, body)])).get_orders(*dates())
+    message = str(raised.value)
+    for expected in ("30850", "API_FULFILLMENT", "REQUEST", "Invalid date range", "filter"):
+        assert expected in message
+    assert "access-secret" not in message
+    assert "buyer@example.com" not in message
 
 
 def test_expired_access_token_retries_once_with_refresh():

@@ -91,8 +91,8 @@ EBAY_SELLER_RUNAME=
 ```
 
 In the eBay Developer Portal, open the matching Production keyset under **Application Keys**, then
-**User Tokens**. Create or select a Redirect URL, configure its real Auth Accepted and Auth Declined
-URLs (and the requested policy/contact fields), and copy the eBay-generated RuName into
+**User Tokens**. Under **Your eBay Sign-in Settings**, add eBay Redirect URL, configure its real Auth Accepted and Auth Declined
+URLs (and the requested policy/contact fields), enable OAuth and copy the eBay-generated RuName into
 `EBAY_SELLER_RUNAME`. A RuName is not an arbitrary callback URL and Production and Sandbox RuNames
 are different.
 

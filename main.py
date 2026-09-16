@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import webbrowser
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from getpass import getpass
 
@@ -20,6 +21,9 @@ from parser.extractor import extract_specs
 from pricing.estimator import calculate_pricing_result, estimate_market_value, score_deal
 from utils.dedupe import init_db, has_seen, mark_seen
 from utils.distance import compute_distance_miles
+
+
+EBAY_NOW_SAFETY_MARGIN = timedelta(minutes=5)
 
 
 def run() -> None:
@@ -170,6 +174,42 @@ def _parse_date(value: str) -> datetime:
     return parsed.replace(tzinfo=timezone.utc)
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _aware_utc(value: datetime, name: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
+    return value.astimezone(timezone.utc)
+
+
+def _order_date_range(
+    start: datetime | None,
+    end: datetime | None,
+    *,
+    clock: Callable[[], datetime] = _utc_now,
+) -> tuple[datetime, datetime]:
+    current = _aware_utc(clock(), "Current time")
+    safe_now = current - EBAY_NOW_SAFETY_MARGIN
+    start_utc = _aware_utc(start, "Order start date") if start else None
+
+    if end is None:
+        inclusive_end = safe_now
+    else:
+        end_utc = _aware_utc(end, "Order end date")
+        if end_utc.date() > current.date():
+            raise ValueError("Order end date cannot be in the future")
+        end_of_date = end_utc + timedelta(days=1, milliseconds=-1)
+        # Only today's boundary represents "now" and needs clock-skew protection.
+        inclusive_end = min(end_of_date, safe_now)
+
+    start_utc = start_utc or (inclusive_end - timedelta(days=30))
+    if start_utc >= inclusive_end:
+        raise ValueError("Order start date must be before end date")
+    return start_utc, inclusive_end
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Flipper resale analysis CLI")
     commands = parser.add_subparsers(dest="command")
@@ -206,9 +246,7 @@ def run_ebay_command(args: argparse.Namespace) -> int:
                 print("No local eBay seller authorization was stored.")
             return 0
 
-        now = datetime.now(timezone.utc)
-        end = (args.end + timedelta(days=1)) if args.end else now
-        start = args.start or (end - timedelta(days=30))
+        start, end = _order_date_range(args.start, args.end)
         if end - start > timedelta(days=730):
             raise SellerOAuthError("Order date range cannot exceed eBay's two-year history window")
         orders = FulfillmentClient(oauth).get_orders(start, end)

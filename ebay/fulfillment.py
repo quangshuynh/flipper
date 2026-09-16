@@ -38,9 +38,42 @@ class FulfillmentClient:
 
     @staticmethod
     def _timestamp(value: datetime) -> str:
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("eBay timestamps must be timezone-aware")
+        return (
+            value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        )
+
+    @staticmethod
+    def _error_detail(response: requests.Response) -> str:
+        """Extract only documented, non-sensitive fields from an eBay error payload."""
+        try:
+            body = response.json()
+        except (ValueError, TypeError):
+            return ""
+        if not isinstance(body, dict) or not isinstance(body.get("errors"), list):
+            return ""
+
+        details = []
+        for error in body["errors"][:3]:
+            if not isinstance(error, dict):
+                continue
+            fields = []
+            for key in ("errorId", "domain", "category", "message", "longMessage"):
+                value = error.get(key)
+                if isinstance(value, (str, int)):
+                    text = str(value).replace("\r", " ").replace("\n", " ")[:500]
+                    fields.append(f"{key}={text}")
+            parameter_names = []
+            if isinstance(error.get("parameters"), list):
+                for parameter in error["parameters"]:
+                    if isinstance(parameter, dict) and isinstance(parameter.get("name"), str):
+                        parameter_names.append(parameter["name"][:100])
+            if parameter_names:
+                fields.append(f"parameters={','.join(parameter_names[:10])}")
+            if fields:
+                details.append("; ".join(fields))
+        return " | ".join(details)
 
     def get_orders(self, start: datetime, end: datetime) -> list[EbayOrder]:
         if start >= end:
@@ -76,8 +109,10 @@ class FulfillmentClient:
                     f"eBay order service is temporarily unavailable (HTTP {response.status_code})"
                 )
             if response.status_code >= 400:
+                detail = self._error_detail(response)
+                suffix = f": {detail}" if detail else ""
                 raise FulfillmentApiError(
-                    f"eBay order retrieval failed (HTTP {response.status_code})"
+                    f"eBay order retrieval failed (HTTP {response.status_code}){suffix}"
                 )
             try:
                 body: Any = response.json()
