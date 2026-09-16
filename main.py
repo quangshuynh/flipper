@@ -17,6 +17,7 @@ from ebay.finance_reconciliation import (
     FinanceMatchStatus,
     reconcile_finance_transactions,
 )
+from ebay.finance_import import FinanceImportStatus, import_finance_transactions
 from ebay.finance_transactions import FinanceTransaction
 from ebay.finances import FinancesApiError, FinancesClient
 from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
@@ -298,6 +299,36 @@ def _print_finances(transactions: list[FinanceTransaction], sales) -> None:
     )
 
 
+def _print_finance_import(transactions: list[FinanceTransaction], store: InventoryStore) -> bool:
+    results = import_finance_transactions(transactions, store)
+    print("eBay Finances Accounting Import")
+    for result in results:
+        target = f" -> {result.sale.sale_id}" if result.sale else ""
+        category = f" | {result.category}" if result.category else ""
+        print(
+            f"{result.transaction_id} | {result.status.value.replace('_', ' ')}{target}{category}"
+        )
+        if result.detail:
+            print(f"  {result.detail}")
+    counts = {status: 0 for status in FinanceImportStatus}
+    for result in results:
+        counts[result.status] += 1
+    print("")
+    print(f"examined: {len(transactions)}")
+    print(f"imported: {counts[FinanceImportStatus.IMPORTED]}")
+    print(f"already imported: {counts[FinanceImportStatus.ALREADY_IMPORTED]}")
+    print(f"unsupported: {counts[FinanceImportStatus.UNSUPPORTED]}")
+    print(f"unmatched: {counts[FinanceImportStatus.UNMATCHED]}")
+    print(f"ambiguous: {counts[FinanceImportStatus.AMBIGUOUS]}")
+    print(f"insufficient identifiers: {counts[FinanceImportStatus.INSUFFICIENT_IDENTIFIERS]}")
+    print(f"conflicts: {counts[FinanceImportStatus.CONFLICT]}")
+    print(f"rejected: {counts[FinanceImportStatus.REJECTED]}")
+    return not any(
+        result.status in {FinanceImportStatus.CONFLICT, FinanceImportStatus.REJECTED}
+        for result in results
+    )
+
+
 def _parse_date(value: str) -> datetime:
     try:
         parsed = datetime.strptime(value, "%Y-%m-%d")
@@ -372,6 +403,14 @@ def build_parser() -> argparse.ArgumentParser:
     finances.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
     finances.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
     finances.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    import_finances = ebay_commands.add_parser(
+        "import-finances", help="import supported matched Finances costs into local sales"
+    )
+    import_finances.add_argument(
+        "--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)"
+    )
+    import_finances.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
+    import_finances.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory = commands.add_parser("inventory", help="manage local inventory")
     inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory_commands = inventory.add_subparsers(dest="inventory_command", required=True)
@@ -526,11 +565,15 @@ def run_ebay_command(args: argparse.Namespace) -> int:
             return 0
 
         start, end = _order_date_range(args.start, args.end)
-        if args.ebay_command == "finances":
+        if args.ebay_command in {"finances", "import-finances"}:
             if end - start > timedelta(days=1096):
                 raise SellerOAuthError("Finance date range cannot exceed eBay's 36-month window")
             transactions = FinancesClient(oauth).get_transactions(start, end)
-            _print_finances(transactions, InventoryStore(args.database).list_sales())
+            store = InventoryStore(args.database)
+            if args.ebay_command == "finances":
+                _print_finances(transactions, store.list_sales())
+            elif not _print_finance_import(transactions, store):
+                return 1
             return 0
         if end - start > timedelta(days=730):
             raise SellerOAuthError("Order date range cannot exceed eBay's two-year history window")
@@ -633,14 +676,22 @@ def run_sales_command(args: argparse.Namespace) -> int:
                 amount = economics.components_by_category.get(category, Decimal(0))
                 print(f"  {labels[category]}: -USD {amount:.2f}")
             print(f"  Recorded realized profit: USD {economics.recorded_profit:.2f}")
-            print("  Reconciliation: incomplete; manual costs are not verified by eBay")
+            print("  Reconciliation: incomplete; unrecorded costs or credits may remain")
         print("Cost components")
         if not costs:
             print("  None recorded (this does not mean zero costs)")
         for cost in costs:
             amount = _format_sale_money(cost.amount_minor, cost.amount_scale, cost.currency)
             note = f" | {cost.note}" if cost.note else ""
-            print(f"  {cost.cost_id} | {cost.category} | -{amount} | source: {cost.source}{note}")
+            external = (
+                f" | eBay transaction: {cost.external_transaction_id}"
+                if cost.external_transaction_id
+                else ""
+            )
+            print(
+                f"  {cost.cost_id} | {cost.category} | -{amount} | "
+                f"source: {cost.source}{external}{note}"
+            )
         return 0
     except (
         SaleNotFoundError,

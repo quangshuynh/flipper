@@ -86,8 +86,12 @@ def test_v4_migration_preserves_sale_and_starts_with_zero_components(tmp_path):
     sale = sold_inventory(store)
     with sqlite3.connect(store.path) as connection:
         connection.execute("DROP TRIGGER sale_cost_currency_matches_sale")
+        connection.execute("DROP TRIGGER sale_cost_external_identity_insert")
+        connection.execute("DROP TRIGGER sale_cost_external_identity_update")
+        connection.execute("DROP INDEX sale_costs_external_identity")
         connection.execute("DROP TABLE sale_costs")
         connection.execute("DROP TABLE sale_cost_id_sequence")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
         connection.execute("DELETE FROM schema_migrations WHERE version = 5")
 
     store.initialize()
@@ -97,7 +101,7 @@ def test_v4_migration_preserves_sale_and_starts_with_zero_components(tmp_path):
     with sqlite3.connect(store.path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
 
 @pytest.mark.parametrize(
@@ -182,7 +186,7 @@ def test_cli_add_show_and_remove_cost(tmp_path, capsys):
     assert "Shipping: -USD 7.25" in shown
     assert "Refunds: -USD 0.00" in shown
     assert "Recorded realized profit: USD 39.31" in shown
-    assert "manual costs are not verified by eBay" in shown
+    assert "unrecorded costs or credits may remain" in shown
     assert main.main([*base, "remove-cost", "C000001"]) == 0
     assert "Removed C000001" in capsys.readouterr().out
 

@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
@@ -47,6 +47,10 @@ class SaleCostNotFoundError(LookupError):
 
 class SaleCostValidationError(ValueError):
     """A sale cost component is invalid."""
+
+
+class SaleCostConflictError(SaleCostValidationError):
+    """An external cost identity conflicts with persisted accounting data."""
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,8 @@ class SaleCostRecord:
     amount_scale: int
     currency: str
     source: str
+    external_transaction_id: str | None
+    external_component_key: str | None
     note: str
     created_at: str
 
@@ -325,6 +331,58 @@ class InventoryStore:
                     END"""
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (5)")
+            if 6 not in versions:
+                legacy_external = connection.execute(
+                    "SELECT cost_id FROM sale_costs WHERE source = 'ebay_finances' LIMIT 1"
+                ).fetchone()
+                if legacy_external is not None:
+                    raise RuntimeError(
+                        "inventory migration cannot assign external identities to existing "
+                        "ebay_finances costs; remove or correct those records first"
+                    )
+                connection.execute("ALTER TABLE sale_costs ADD COLUMN external_transaction_id TEXT")
+                connection.execute("ALTER TABLE sale_costs ADD COLUMN external_component_key TEXT")
+                connection.execute(
+                    """CREATE UNIQUE INDEX sale_costs_external_identity
+                    ON sale_costs (source, external_transaction_id, external_component_key)
+                    WHERE external_transaction_id IS NOT NULL"""
+                )
+                connection.execute(
+                    """CREATE TRIGGER sale_cost_external_identity_insert
+                    BEFORE INSERT ON sale_costs
+                    WHEN (NEW.source = 'manual' AND (
+                              NEW.external_transaction_id IS NOT NULL OR
+                              NEW.external_component_key IS NOT NULL
+                          )) OR
+                         (NEW.source = 'ebay_finances' AND (
+                              NEW.external_transaction_id IS NULL OR
+                              length(trim(NEW.external_transaction_id)) = 0 OR
+                              NEW.external_component_key IS NULL OR
+                              length(trim(NEW.external_component_key)) = 0
+                          ))
+                    BEGIN
+                        SELECT RAISE(ABORT, 'invalid sale cost external identity');
+                    END"""
+                )
+                connection.execute(
+                    """CREATE TRIGGER sale_cost_external_identity_update
+                    BEFORE UPDATE OF source, external_transaction_id, external_component_key
+                    ON sale_costs
+                    WHEN (NEW.source = 'manual' AND (
+                              NEW.external_transaction_id IS NOT NULL OR
+                              NEW.external_component_key IS NOT NULL
+                          )) OR
+                         (NEW.source = 'ebay_finances' AND (
+                              NEW.external_transaction_id IS NULL OR
+                              length(trim(NEW.external_transaction_id)) = 0 OR
+                              NEW.external_component_key IS NULL OR
+                              length(trim(NEW.external_component_key)) = 0
+                          ))
+                    BEGIN
+                        SELECT RAISE(ABORT, 'invalid sale cost external identity');
+                    END"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (6)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -748,6 +806,10 @@ class InventoryStore:
             raise SaleCostValidationError(
                 f"cost source must be one of: {', '.join(SALE_COST_SOURCES)}"
             )
+        if source != "manual":
+            raise SaleCostValidationError(
+                "external sale costs must be imported through their source integration"
+            )
         try:
             amount_minor, amount_scale = self._scaled_amount(amount)
         except SaleImportError as exc:
@@ -802,6 +864,103 @@ class InventoryStore:
             connection.close()
         return self.get_sale_cost(cost_id)
 
+    def import_ebay_finances_cost(
+        self,
+        sale_id: str,
+        *,
+        category: str,
+        amount: Decimal,
+        currency: str,
+        external_transaction_id: str,
+        external_component_key: str,
+        note: str = "",
+    ) -> tuple[SaleCostRecord, bool]:
+        """Atomically validate and persist one externally identified Finances cost."""
+        if category not in SALE_COST_TYPES:
+            raise SaleCostValidationError(f"cost type must be one of: {', '.join(SALE_COST_TYPES)}")
+        transaction_id = self._required(external_transaction_id, "external transaction ID")
+        component_key = self._required(external_component_key, "external component key")
+        try:
+            amount_minor, amount_scale = self._scaled_amount(amount)
+        except SaleImportError as exc:
+            raise SaleCostValidationError(str(exc).replace("gross item", "cost")) from exc
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            sale = connection.execute(
+                "SELECT * FROM sales WHERE sale_id = ?", (sale_id.upper(),)
+            ).fetchone()
+            if sale is None:
+                raise SaleNotFoundError(f"sale {sale_id} was not found")
+            component_currency = currency.strip().upper()
+            if component_currency != sale["currency"]:
+                raise SaleCostValidationError(
+                    f"cost currency {component_currency} does not match sale currency "
+                    f"{sale['currency']}; currency conversion is not supported"
+                )
+            existing = connection.execute(
+                """SELECT sale_costs.*, sales.sale_id
+                FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
+                WHERE source = 'ebay_finances' AND external_transaction_id = ?
+                  AND external_component_key = ?""",
+                (transaction_id, component_key),
+            ).fetchone()
+            immutable = (
+                sale["internal_id"],
+                category,
+                amount_minor,
+                amount_scale,
+                component_currency,
+            )
+            if existing is not None:
+                persisted = (
+                    existing["sale_internal_id"],
+                    existing["category"],
+                    existing["amount_minor"],
+                    existing["amount_scale"],
+                    existing["currency"],
+                )
+                if persisted != immutable:
+                    raise SaleCostConflictError(
+                        "external Finances identity conflicts with persisted accounting data"
+                    )
+                connection.commit()
+                return self._sale_cost_record(existing), False
+            next_value = connection.execute(
+                "SELECT last_value + 1 FROM sale_cost_id_sequence WHERE singleton = 1"
+            ).fetchone()[0]
+            cost_id = f"C{next_value:06d}"
+            connection.execute(
+                """INSERT INTO sale_costs (
+                    cost_id, sale_internal_id, category, amount_minor, amount_scale,
+                    currency, source, note, created_at, external_transaction_id,
+                    external_component_key
+                ) VALUES (?, ?, ?, ?, ?, ?, 'ebay_finances', ?, ?, ?, ?)""",
+                (
+                    cost_id,
+                    sale["internal_id"],
+                    category,
+                    amount_minor,
+                    amount_scale,
+                    component_currency,
+                    note.strip(),
+                    self._utc_now(),
+                    transaction_id,
+                    component_key,
+                ),
+            )
+            connection.execute(
+                "UPDATE sale_cost_id_sequence SET last_value = ? WHERE singleton = 1", (next_value,)
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_sale_cost(cost_id), True
+
     def get_sale_cost(self, cost_id: str) -> SaleCostRecord:
         self.initialize()
         with self._connect() as connection:
@@ -841,6 +1000,10 @@ class InventoryStore:
             if row is None:
                 raise SaleCostNotFoundError(f"sale cost {cost_id} was not found")
             record = self._sale_cost_record(row)
+            if record.source != "manual":
+                raise SaleCostValidationError(
+                    "externally sourced sale costs cannot be removed with the manual command"
+                )
             connection.execute(
                 "DELETE FROM sale_costs WHERE internal_id = ?", (row["internal_id"],)
             )
@@ -864,6 +1027,8 @@ class InventoryStore:
             amount_scale=row["amount_scale"],
             currency=row["currency"],
             source=row["source"],
+            external_transaction_id=row["external_transaction_id"],
+            external_component_key=row["external_component_key"],
             note=row["note"],
             created_at=row["created_at"],
         )

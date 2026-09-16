@@ -60,7 +60,12 @@ def raw_transaction(
         "orderLineItems": [
             {
                 "orderLineItemId": line_id,
-                "fees": [{"feeType": "FINAL_VALUE_FEE", "amount": {"value": "1.23"}}],
+                "fees": [
+                    {
+                        "feeType": "FINAL_VALUE_FEE",
+                        "amount": {"value": "1.23", "currency": currency},
+                    }
+                ],
                 "title": "must-not-survive",
             }
         ],
@@ -75,6 +80,7 @@ def test_normalizes_exact_money_currency_native_semantics_and_excludes_pii():
     assert transaction.classification is TransactionClassification.SALE
     assert transaction.native_type == "SALE"
     assert transaction.order_lines[0].fee_types == ("FINAL_VALUE_FEE",)
+    assert transaction.order_lines[0].fees[0].amount.value == Decimal("1.23")
     assert "buyer" not in transaction.__dataclass_fields__
     assert "title" not in transaction.order_lines[0].__dataclass_fields__
 
