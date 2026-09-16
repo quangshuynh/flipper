@@ -1,5 +1,6 @@
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -31,7 +32,8 @@ def test_empty_database_initializes_versioned_schema(tmp_path):
     assert store.list() == []
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT version FROM schema_migrations").fetchall() == [
-            (CURRENT_SCHEMA_VERSION,)
+            (1,),
+            (CURRENT_SCHEMA_VERSION,),
         ]
 
 
@@ -66,7 +68,6 @@ def test_money_and_optional_marketplace_round_trip_exactly(tmp_path):
             marketplace="eBay",
             marketplace_item_id="137744631273",
             marketplace_sku="Q0001",
-            status="listed",
         )
     )
     assert plain.acquisition_cost == Decimal("10.01")
@@ -97,14 +98,14 @@ def test_required_fields_are_enforced(tmp_path, override):
 
 def test_status_validation_lookup_and_ordering(tmp_path):
     store = InventoryStore(tmp_path / "inventory.db")
-    first = store.add(**values(status="archived"))
-    second = store.add(**values(title="Second", status="sold"))
+    first = store.add(**values())
+    second = store.add(**values(title="Second"))
     assert store.get("q0001") == first
     assert [item.inventory_id for item in store.list()] == [
         first.inventory_id,
         second.inventory_id,
     ]
-    with pytest.raises(InventoryValidationError):
+    with pytest.raises(InventoryValidationError, match="must start as acquired"):
         store.add(**values(status="missing"))
     with pytest.raises(InventoryNotFoundError):
         store.get("Q9999")
@@ -133,11 +134,11 @@ def test_single_field_update_preserves_unspecified_fields_and_identity(tmp_path)
     store = InventoryStore(tmp_path / "inventory.db")
     original = store.add(**values(notes="old note"))
 
-    updated = store.update("Q0001", status="listed")
+    updated = store.update("Q0001", notes="new note")
 
-    assert updated.status == "listed"
+    assert updated.status == "acquired"
     assert updated.title == original.title
-    assert updated.notes == "old note"
+    assert updated.notes == "new note"
     assert updated.inventory_id == original.inventory_id
     assert updated.internal_id == original.internal_id
 
@@ -152,7 +153,6 @@ def test_multiple_fields_and_exact_money_can_be_updated(tmp_path):
         acquired_at="2026-09-02",
         acquisition_cost="19.99",
         quantity=2,
-        status="listed",
         notes="tested",
     )
     assert updated.title == "Updated recorder"
@@ -160,7 +160,7 @@ def test_multiple_fields_and_exact_money_can_be_updated(tmp_path):
     assert updated.acquired_at == "2026-09-02"
     assert updated.acquisition_cost == Decimal("19.99")
     assert updated.quantity == 2
-    assert updated.status == "listed"
+    assert updated.status == "acquired"
     assert updated.notes == "tested"
 
 
@@ -185,7 +185,7 @@ def test_invalid_update_rolls_back_without_partial_mutation(tmp_path, changes):
 
 def test_unknown_item_cannot_be_updated(tmp_path):
     with pytest.raises(InventoryNotFoundError, match="Q9999"):
-        InventoryStore(tmp_path / "inventory.db").update("Q9999", status="listed")
+        InventoryStore(tmp_path / "inventory.db").update("Q9999", notes="missing")
 
 
 def test_marketplace_fields_can_be_added_changed_and_cleared(tmp_path):
@@ -228,3 +228,149 @@ def test_updates_do_not_affect_allocation_sequence(tmp_path):
     store.add(**values())
     store.update("Q0001", title="changed")
     assert store.add(**values(title="Second")).inventory_id == "Q0002"
+
+
+def test_v1_database_migrates_without_changing_existing_record(tmp_path):
+    database = tmp_path / "inventory.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+               );
+               INSERT INTO schema_migrations (version) VALUES (1);
+               CREATE TABLE inventory_id_sequence (
+                   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                   last_value INTEGER NOT NULL CHECK (last_value >= 0)
+               );
+               INSERT INTO inventory_id_sequence VALUES (1, 1);
+               CREATE TABLE inventory_items (
+                   internal_id INTEGER PRIMARY KEY,
+                   inventory_id TEXT NOT NULL UNIQUE,
+                   title TEXT NOT NULL,
+                   source TEXT NOT NULL,
+                   acquired_at TEXT NOT NULL,
+                   acquisition_cost_cents INTEGER NOT NULL,
+                   quantity INTEGER NOT NULL,
+                   notes TEXT NOT NULL DEFAULT '',
+                   status TEXT NOT NULL,
+                   marketplace TEXT,
+                   marketplace_item_id TEXT,
+                   marketplace_sku TEXT,
+                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+               );
+               INSERT INTO inventory_items (
+                   internal_id, inventory_id, title, source, acquired_at,
+                   acquisition_cost_cents, quantity, notes, status, marketplace,
+                   marketplace_item_id, marketplace_sku
+               ) VALUES (7, 'Q0001', 'Existing', 'sale', '2026-08-01', 1234, 1,
+                         'kept', 'listed', 'eBay', '123', 'Q0001');
+            """
+        )
+
+    record = InventoryStore(database).get("Q0001")
+
+    assert (record.internal_id, record.inventory_id, record.title, record.status) == (
+        7,
+        "Q0001",
+        "Existing",
+        "listed",
+    )
+    assert record.listed_at is None
+    assert record.sold_at is None
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall() == [
+            (1,),
+            (2,),
+        ]
+
+
+def test_lifecycle_transitions_set_utc_timestamps_and_preserve_identity(tmp_path):
+    moments = iter(
+        [
+            datetime(2026, 9, 16, 14, 30, tzinfo=timezone.utc),
+            datetime(2026, 9, 17, 15, 45, tzinfo=timezone.utc),
+        ]
+    )
+    store = InventoryStore(tmp_path / "inventory.db", clock=lambda: next(moments))
+    original = store.add(**values())
+
+    listed = store.transition_status("Q0001", "listed")
+    sold = store.transition_status("Q0001", "sold")
+
+    assert listed.listed_at == "2026-09-16T14:30:00Z"
+    assert listed.sold_at is None
+    assert sold.listed_at == listed.listed_at
+    assert sold.sold_at == "2026-09-17T15:45:00Z"
+    assert sold.inventory_id == original.inventory_id
+    assert sold.internal_id == original.internal_id
+
+
+@pytest.mark.parametrize(
+    ("start", "target"),
+    [("acquired", "sold"), ("acquired", "acquired"), ("archived", "sold")],
+)
+def test_invalid_lifecycle_transitions_are_rejected(tmp_path, start, target):
+    store = InventoryStore(tmp_path / "inventory.db")
+    store.add(**values())
+    if start == "archived":
+        store.transition_status("Q0001", "archived")
+    with pytest.raises(InventoryValidationError, match="cannot transition"):
+        store.transition_status("Q0001", target)
+
+
+def test_sold_correction_returns_to_listed_and_clears_only_sold_timestamp(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    store.add(**values())
+    listed = store.transition_status("Q0001", "listed")
+    store.transition_status("Q0001", "sold")
+
+    corrected = store.transition_status("Q0001", "listed")
+
+    assert corrected.listed_at == listed.listed_at
+    assert corrected.sold_at is None
+
+
+def test_restore_to_acquired_clears_lifecycle_timestamps(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    store.add(**values())
+    store.transition_status("Q0001", "listed")
+    restored = store.transition_status("Q0001", "acquired")
+    assert (restored.status, restored.listed_at, restored.sold_at) == ("acquired", None, None)
+
+
+def test_acquired_and_listed_items_can_be_archived_and_restored(tmp_path):
+    acquired_store = InventoryStore(tmp_path / "acquired.db")
+    acquired_store.add(**values())
+    assert acquired_store.transition_status("Q0001", "archived").status == "archived"
+
+    listed_store = InventoryStore(tmp_path / "listed.db")
+    listed_store.add(**values())
+    listed = listed_store.transition_status("Q0001", "listed")
+    archived = listed_store.transition_status("Q0001", "archived")
+    assert archived.listed_at == listed.listed_at
+    restored = listed_store.transition_status("Q0001", "acquired")
+    assert (restored.listed_at, restored.sold_at) == (None, None)
+
+
+def test_generic_update_cannot_bypass_lifecycle(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    original = store.add(**values())
+    with pytest.raises(InventoryValidationError, match="lifecycle transition"):
+        store.update("Q0001", title="must roll back", status="listed")
+    assert store.get("Q0001") == original
+
+
+def test_failed_lifecycle_update_rolls_back_status_and_timestamps(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    original = store.add(**values())
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_transition BEFORE UPDATE ON inventory_items "
+            "BEGIN SELECT RAISE(ABORT, 'rejected'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.transition_status("Q0001", "listed")
+    assert store.get("Q0001") == original

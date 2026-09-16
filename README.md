@@ -147,17 +147,30 @@ Existing records can be corrected or enriched with partial updates. Unspecified 
 unchanged; pass an empty string to clear an optional marketplace field or notes.
 
 ```bash
-python main.py inventory update Q0001 --status listed
 python main.py inventory update Q0001 --notes "Tested and ready to list"
 python main.py inventory update Q0001 --marketplace eBay --marketplace-item-id 123456789012 --marketplace-sku Q0001
 python main.py inventory update Q0001 --marketplace-item-id ""
 ```
 
-An item can optionally retain marketplace linkage:
+Status changes use a dedicated lifecycle operation and record UTC event timestamps automatically:
 
 ```bash
-python main.py inventory add --title "Example item" --source "local sale" --acquired-at 2026-09-01 --cost 25.00 --status listed --marketplace eBay --marketplace-item-id 123456789012 --marketplace-sku Q0001
+python main.py inventory status Q0001 listed
+python main.py inventory status Q0001 sold
 ```
+
+New items begin as `acquired`. The normal forward transitions are `acquired → listed → sold`;
+`acquired` or `listed` items may instead be archived. Archival preserves any lifecycle timestamps.
+For practical corrections, `sold → listed` clears `sold_at` but retains `listed_at`,
+`listed → acquired` clears both lifecycle timestamps, and `archived → acquired` restores the item
+while clearing both timestamps. A restored item can then be listed again. Generic
+`inventory update` cannot change status.
+
+Lifecycle timestamps use ISO 8601 UTC values ending in `Z`. Databases created with schema v1 are
+migrated automatically; existing records receive null lifecycle timestamps because Flipper does
+not infer historical events.
+
+An item can optionally retain marketplace linkage by using `inventory update` after creation.
 
 Marketplace item IDs and SKUs are references for future reconciliation. SKU linkage does not mean
 an item sold, and inventory is not yet automatically reconciled with eBay orders. Flipper keeps the

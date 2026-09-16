@@ -26,14 +26,12 @@ def test_add_list_and_show(tmp_path, capsys):
             "123",
             "--marketplace-sku",
             "Q0001",
-            "--status",
-            "listed",
         )
         == 0
     )
     assert "Q0001" in capsys.readouterr().out
     assert command(database, "list") == 0
-    assert "Q0001 | listed | qty 1 | $20.00 | Recorder" in capsys.readouterr().out
+    assert "Q0001 | acquired | qty 1 | $20.00 | Recorder" in capsys.readouterr().out
     assert command(database, "show", "Q0001") == 0
     output = capsys.readouterr().out
     assert "Acquisition" in output
@@ -99,3 +97,34 @@ def test_cli_can_clear_marketplace_field(tmp_path, capsys):
 def test_cli_does_not_offer_inventory_id_mutation(tmp_path):
     with pytest.raises(SystemExit):
         command(tmp_path / "inventory.db", "update", "Q0001", "--inventory-id", "Q0002")
+
+
+def test_status_command_applies_lifecycle_and_show_displays_timestamps(tmp_path, capsys):
+    database = tmp_path / "inventory.db"
+    assert (
+        command(
+            database,
+            "add",
+            "--title",
+            "Recorder",
+            "--source",
+            "sale",
+            "--acquired-at",
+            "2026-09-01",
+            "--cost",
+            "20",
+        )
+        == 0
+    )
+    assert command(database, "status", "Q0001", "listed") == 0
+    assert "Inventory item Q0001: listed" in capsys.readouterr().out
+    assert command(database, "show", "Q0001") == 0
+    output = capsys.readouterr().out
+    assert "Listed at (UTC):" in output
+    assert "Listed at (UTC): none" not in output
+    assert "Sold at (UTC): none" in output
+
+
+def test_update_cli_does_not_offer_status_bypass(tmp_path):
+    with pytest.raises(SystemExit):
+        command(tmp_path / "inventory.db", "update", "Q0001", "--status", "listed")

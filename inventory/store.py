@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
+STATUS_TRANSITIONS = {
+    "acquired": frozenset({"listed", "archived"}),
+    "listed": frozenset({"acquired", "sold", "archived"}),
+    "sold": frozenset({"listed"}),
+    "archived": frozenset({"acquired"}),
+}
 _UNSET = object()
 
 
@@ -37,6 +43,8 @@ class InventoryRecord:
     marketplace: str | None
     marketplace_item_id: str | None
     marketplace_sku: str | None
+    listed_at: str | None
+    sold_at: str | None
 
     @property
     def acquisition_cost(self) -> Decimal:
@@ -60,8 +68,15 @@ def parse_usd_cents(value: str | Decimal) -> int:
 class InventoryStore:
     """Own the local inventory database and its schema migrations."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, clock=None) -> None:
         self.path = Path(path)
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def _utc_now(self) -> str:
+        value = self._clock()
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("inventory clock must return a timezone-aware datetime")
+        return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,6 +133,21 @@ class InventoryStore:
                     "ON inventory_items (marketplace, marketplace_sku)"
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (1)")
+            if 2 not in versions:
+                timestamp_check = (
+                    "CHECK ({column} IS NULL OR "
+                    "(length({column}) = 20 AND substr({column}, 11, 1) = 'T' "
+                    "AND substr({column}, -1) = 'Z'))"
+                )
+                connection.execute(
+                    "ALTER TABLE inventory_items ADD COLUMN listed_at TEXT "
+                    + timestamp_check.format(column="listed_at")
+                )
+                connection.execute(
+                    "ALTER TABLE inventory_items ADD COLUMN sold_at TEXT "
+                    + timestamp_check.format(column="sold_at")
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (2)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -193,6 +223,10 @@ class InventoryStore:
         marketplace_item_id: str | None = None,
         marketplace_sku: str | None = None,
     ) -> InventoryRecord:
+        if status != "acquired":
+            raise InventoryValidationError(
+                "new inventory items must start as acquired; use inventory status to transition"
+            )
         values = self._validate_values(
             title=title,
             source=source,
@@ -250,6 +284,10 @@ class InventoryStore:
         marketplace_sku: str | None | object = _UNSET,
     ) -> InventoryRecord:
         """Apply a validated partial update without changing either record identifier."""
+        if status is not _UNSET:
+            raise InventoryValidationError(
+                "status cannot be changed by a generic update; use the lifecycle transition"
+            )
         self.initialize()
         connection = self._connect()
         try:
@@ -304,6 +342,52 @@ class InventoryStore:
             connection.close()
         return self.get(inventory_id)
 
+    def transition_status(self, inventory_id: str, status: str) -> InventoryRecord:
+        """Apply one valid lifecycle transition and its UTC timestamps atomically."""
+        if status not in VALID_STATUSES:
+            raise InventoryValidationError(f"status must be one of: {', '.join(VALID_STATUSES)}")
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM inventory_items WHERE inventory_id = ?", (inventory_id.upper(),)
+            ).fetchone()
+            if row is None:
+                raise InventoryNotFoundError(f"inventory item {inventory_id} was not found")
+            current = row["status"]
+            if status not in STATUS_TRANSITIONS[current]:
+                allowed = ", ".join(sorted(STATUS_TRANSITIONS[current]))
+                raise InventoryValidationError(
+                    f"cannot transition inventory item from {current} to {status}; "
+                    f"allowed: {allowed}"
+                )
+
+            listed_at = row["listed_at"]
+            sold_at = row["sold_at"]
+            if current == "acquired" and status == "listed":
+                listed_at = self._utc_now()
+            elif current == "listed" and status == "sold":
+                sold_at = self._utc_now()
+            elif status == "acquired":
+                listed_at = None
+                sold_at = None
+            elif current == "sold" and status == "listed":
+                sold_at = None
+
+            connection.execute(
+                "UPDATE inventory_items SET status = ?, listed_at = ?, sold_at = ? "
+                "WHERE internal_id = ?",
+                (status, listed_at, sold_at, row["internal_id"]),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get(inventory_id)
+
     def get(self, inventory_id: str) -> InventoryRecord:
         self.initialize()
         with self._connect() as connection:
@@ -337,4 +421,6 @@ class InventoryStore:
             marketplace=row["marketplace"],
             marketplace_item_id=row["marketplace_item_id"],
             marketplace_sku=row["marketplace_sku"],
+            listed_at=row["listed_at"],
+            sold_at=row["sold_at"],
         )
