@@ -7,6 +7,7 @@ import sys
 import webbrowser
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from getpass import getpass
 
 from dotenv import load_dotenv
@@ -15,6 +16,7 @@ from collectors.json_feed_collector import fetch_listings
 from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
 from ebay.orders import EbayOrder, Money
 from ebay.reconciliation import ReconciliationStatus, reconcile_ebay_orders, summarize
+from ebay.sale_import import SaleImportStatus, import_ebay_sales
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from inventory.store import (
     VALID_STATUSES,
@@ -22,6 +24,7 @@ from inventory.store import (
     InventoryRecord,
     InventoryStore,
     InventoryValidationError,
+    SaleNotFoundError,
 )
 from models import DealEvaluation
 from parser.ai_enricher import enrich_specs_with_ai
@@ -206,6 +209,44 @@ def _print_reconciliation(orders: list[EbayOrder], inventory: list[InventoryReco
     )
 
 
+def _format_sale_money(amount: int, scale: int, currency: str) -> str:
+    value = Decimal(amount).scaleb(-scale)
+    return f"{currency} {value:.{scale}f}"
+
+
+def _print_sale_import(orders: list[EbayOrder], store: InventoryStore) -> bool:
+    results = import_ebay_sales(orders, store)
+    print("eBay Sale Import")
+    for result in results:
+        target = f" -> {result.inventory_id}" if result.inventory_id else ""
+        print(
+            f"{result.order_id} / {result.line_item_id} | "
+            f"{result.status.value.replace('_', ' ')}{target}"
+        )
+        if result.detail:
+            print(f"  {result.detail}")
+    counts = {status: 0 for status in SaleImportStatus}
+    for result in results:
+        counts[result.status] += 1
+    print("")
+    print(
+        "Summary: "
+        f"{len(results)} examined | {counts[SaleImportStatus.IMPORTED]} imported | "
+        f"{counts[SaleImportStatus.ALREADY_IMPORTED]} already imported | "
+        f"{counts[SaleImportStatus.UNMATCHED]} unmatched | "
+        f"{counts[SaleImportStatus.MISSING_SKU]} missing SKU | "
+        f"{counts[SaleImportStatus.AMBIGUOUS]} ambiguous | "
+        f"{counts[SaleImportStatus.MISSING_GROSS]} missing gross | "
+        f"{counts[SaleImportStatus.UNSUPPORTED_QUANTITY]} unsupported quantity | "
+        f"{counts[SaleImportStatus.INCOMPATIBLE_INVENTORY]} incompatible | "
+        f"{counts[SaleImportStatus.CONFLICT]} conflict"
+    )
+    return not any(
+        result.status in {SaleImportStatus.INCOMPATIBLE_INVENTORY, SaleImportStatus.CONFLICT}
+        for result in results
+    )
+
+
 def _parse_date(value: str) -> datetime:
     try:
         parsed = datetime.strptime(value, "%Y-%m-%d")
@@ -266,6 +307,14 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
     reconcile.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
     reconcile.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    import_sales = ebay_commands.add_parser(
+        "import-sales", help="persist deterministically matched order lines as sales"
+    )
+    import_sales.add_argument(
+        "--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)"
+    )
+    import_sales.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
+    import_sales.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory = commands.add_parser("inventory", help="manage local inventory")
     inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory_commands = inventory.add_subparsers(dest="inventory_command", required=True)
@@ -296,6 +345,12 @@ def build_parser() -> argparse.ArgumentParser:
     status = inventory_commands.add_parser("status", help="transition inventory lifecycle status")
     status.add_argument("inventory_id")
     status.add_argument("status", choices=VALID_STATUSES)
+    sales = commands.add_parser("sales", help="inspect imported local sales")
+    sales.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    sales_commands = sales.add_subparsers(dest="sales_command", required=True)
+    sales_commands.add_parser("list", help="list imported sales")
+    sale_show = sales_commands.add_parser("show", help="show one imported sale")
+    sale_show.add_argument("sale_id")
     return parser
 
 
@@ -409,10 +464,48 @@ def run_ebay_command(args: argparse.Namespace) -> int:
         orders = FulfillmentClient(oauth).get_orders(start, end)
         if args.ebay_command == "reconcile":
             _print_reconciliation(orders, InventoryStore(args.database).list())
+        elif args.ebay_command == "import-sales":
+            if not _print_sale_import(orders, InventoryStore(args.database)):
+                return 1
         else:
             _print_orders(orders)
         return 0
     except (SellerOAuthError, FulfillmentApiError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def run_sales_command(args: argparse.Namespace) -> int:
+    store = InventoryStore(args.database)
+    try:
+        if args.sales_command == "list":
+            sales = store.list_sales()
+            if not sales:
+                print("No imported sales found.")
+                return 0
+            for sale in sales:
+                gross = _format_sale_money(
+                    sale.gross_amount_minor, sale.gross_amount_scale, sale.currency
+                )
+                print(
+                    f"{sale.sale_id} | {sale.inventory_id} | {sale.marketplace} | "
+                    f"{gross} | {sale.sold_at}"
+                )
+            return 0
+        sale = store.get_sale(args.sale_id)
+        gross = _format_sale_money(sale.gross_amount_minor, sale.gross_amount_scale, sale.currency)
+        print(f"Sale {sale.sale_id}")
+        print(f"  Inventory: {sale.inventory_id}")
+        print(f"  Marketplace: {sale.marketplace}")
+        print(f"  Order: {sale.external_order_id}")
+        print(f"  Order line: {sale.external_line_item_id}")
+        print(f"  SKU: {sale.marketplace_sku}")
+        print(f"  Quantity: {sale.quantity}")
+        print(f"  Gross: {gross}")
+        print(f"  Sold at: {sale.sold_at}")
+        print(f"  Imported at: {sale.imported_at}")
+        return 0
+    except (SaleNotFoundError, RuntimeError, sqlite3.Error) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -424,6 +517,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_ebay_command(args)
     if args.command == "inventory":
         return run_inventory_command(args)
+    if args.command == "sales":
+        return run_sales_command(args)
     run()
     return 0
 
