@@ -2,11 +2,15 @@
   <img src="docs/images/flipper-logo.png" alt="flipper" width="256">
 </p>
 
-[![CI](https://github.com/quangshuynh/flipper/actions/workflows/ci.yml/badge.svg)](https://github.com/quangshuynh/flipper/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/quangshuynh/flipper/actions/workflows/ci.yml"><img src="https://github.com/quangshuynh/flipper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
+</p>
 
-Flipper analyzes secondhand computer listings, extracts hardware specifications, estimates resale value, and ranks potential deals using expected resale economics and evidence quality. It currently reads a local or exported JSON feed; it does not crawl marketplaces by itself.
+<p align="center">
+  Flipper analyzes secondhand computer listings, extracts hardware specifications, estimates resale value, and ranks potential deals using expected resale economics and evidence quality. It currently reads a local or exported JSON feed; it does not crawl marketplaces by itself.
+</p>
 
 ## Pipeline
 
@@ -92,7 +96,7 @@ EBAY_SELLER_RUNAME=
 
 In the eBay Developer Portal, open the matching Production keyset under **Application Keys**, then
 **User Tokens**. Under **Your eBay Sign-in Settings**, add eBay Redirect URL, configure its real Auth Accepted and Auth Declined
-URLs (and the requested policy/contact fields), enable OAuth and copy the eBay-generated RuName into
+URLs (and the requested policy/contact fields), enable OAuthand copy the eBay-generated RuName into
 `EBAY_SELLER_RUNAME`. A RuName is not an arbitrary callback URL and Production and Sandbox RuNames
 are different.
 
