@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · Flipper</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <div class="shell">
+    <aside>
+      <a class="brand" href="/">Flipper <small>Reseller operations</small></a>
+      <nav aria-label="Primary">
+        <a class="{{ nav_class('dashboard') }}" href="/">Dashboard</a>
+        <a class="{{ nav_class('inventory') }}" href="/inventory">Inventory</a>
+        <a class="{{ nav_class('sales') }}" href="/sales">Sales</a>
+        <a class="{{ nav_class('analytics') }}" href="/analytics">Analytics</a>
+        <a class="{{ nav_class('analyze') }}" href="/analyze">Analyze</a>
+        <a class="{{ nav_class('settings') }}" href="/settings">Integrations / Settings</a>
+      </nav>
+      <p class="local-note">Local database is authoritative</p>
+    </aside>
+    <main id="content">
+      <header><div><p class="eyebrow">Flipper</p><h1>{{ title }}</h1></div>{% block actions %}{% endblock %}</header>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>
