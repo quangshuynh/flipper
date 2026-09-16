@@ -245,6 +245,18 @@ def build_parser() -> argparse.ArgumentParser:
     inventory_commands.add_parser("list", help="list inventory")
     show = inventory_commands.add_parser("show", help="show one inventory record")
     show.add_argument("inventory_id")
+    update = inventory_commands.add_parser("update", help="update an inventory record")
+    update.add_argument("inventory_id")
+    update.add_argument("--title")
+    update.add_argument("--source", help="acquisition source")
+    update.add_argument("--acquired-at", help="acquisition date (YYYY-MM-DD)")
+    update.add_argument("--cost", dest="acquisition_cost", help="acquisition cost in USD")
+    update.add_argument("--quantity", type=int)
+    update.add_argument("--notes")
+    update.add_argument("--status", choices=VALID_STATUSES)
+    update.add_argument("--marketplace")
+    update.add_argument("--marketplace-item-id")
+    update.add_argument("--marketplace-sku")
     return parser
 
 
@@ -276,6 +288,33 @@ def run_inventory_command(args: argparse.Namespace) -> int:
                     f"{record.inventory_id} | {record.status} | qty {record.quantity} | "
                     f"${record.acquisition_cost:.2f} | {record.title}"
                 )
+            return 0
+
+        if args.inventory_command == "update":
+            fields = {
+                name: value
+                for name, value in vars(args).items()
+                if name
+                in {
+                    "title",
+                    "source",
+                    "acquired_at",
+                    "acquisition_cost",
+                    "quantity",
+                    "notes",
+                    "status",
+                    "marketplace",
+                    "marketplace_item_id",
+                    "marketplace_sku",
+                }
+                and value is not None
+            }
+            record = store.update(args.inventory_id, **fields)
+            print(f"Updated inventory item {record.inventory_id}")
+            print(
+                f"{record.status} | qty {record.quantity} | "
+                f"${record.acquisition_cost:.2f} | {record.title}"
+            )
             return 0
 
         record = store.get(args.inventory_id)

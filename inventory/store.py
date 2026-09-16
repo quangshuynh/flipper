@@ -10,6 +10,7 @@ from pathlib import Path
 
 CURRENT_SCHEMA_VERSION = 1
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
+_UNSET = object()
 
 
 class InventoryValidationError(ValueError):
@@ -138,6 +139,46 @@ class InventoryStore:
         cleaned = value.strip()
         return cleaned or None
 
+    def _validate_values(
+        self,
+        *,
+        title: str,
+        source: str,
+        acquired_at: str,
+        acquisition_cost: str | Decimal,
+        quantity: int,
+        notes: str,
+        status: str,
+        marketplace: str | None,
+        marketplace_item_id: str | None,
+        marketplace_sku: str | None,
+    ) -> dict[str, object]:
+        title = self._required(title, "title")
+        source = self._required(source, "source")
+        try:
+            parsed_date = date.fromisoformat(acquired_at)
+        except (TypeError, ValueError) as exc:
+            raise InventoryValidationError("acquired-at must use YYYY-MM-DD") from exc
+        if parsed_date.isoformat() != acquired_at:
+            raise InventoryValidationError("acquired-at must use YYYY-MM-DD")
+        cost_cents = parse_usd_cents(acquisition_cost)
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
+            raise InventoryValidationError("quantity must be a positive integer")
+        if status not in VALID_STATUSES:
+            raise InventoryValidationError(f"status must be one of: {', '.join(VALID_STATUSES)}")
+        return {
+            "title": title,
+            "source": source,
+            "acquired_at": acquired_at,
+            "acquisition_cost_cents": cost_cents,
+            "quantity": quantity,
+            "notes": notes.strip(),
+            "status": status,
+            "marketplace": self._optional(marketplace),
+            "marketplace_item_id": self._optional(marketplace_item_id),
+            "marketplace_sku": self._optional(marketplace_sku),
+        }
+
     def add(
         self,
         *,
@@ -152,23 +193,18 @@ class InventoryStore:
         marketplace_item_id: str | None = None,
         marketplace_sku: str | None = None,
     ) -> InventoryRecord:
-        title = self._required(title, "title")
-        source = self._required(source, "source")
-        try:
-            parsed_date = date.fromisoformat(acquired_at)
-        except (TypeError, ValueError) as exc:
-            raise InventoryValidationError("acquired-at must use YYYY-MM-DD") from exc
-        if parsed_date.isoformat() != acquired_at:
-            raise InventoryValidationError("acquired-at must use YYYY-MM-DD")
-        cost_cents = parse_usd_cents(acquisition_cost)
-        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
-            raise InventoryValidationError("quantity must be a positive integer")
-        if status not in VALID_STATUSES:
-            raise InventoryValidationError(f"status must be one of: {', '.join(VALID_STATUSES)}")
-        notes = notes.strip()
-        marketplace = self._optional(marketplace)
-        marketplace_item_id = self._optional(marketplace_item_id)
-        marketplace_sku = self._optional(marketplace_sku)
+        values = self._validate_values(
+            title=title,
+            source=source,
+            acquired_at=acquired_at,
+            acquisition_cost=acquisition_cost,
+            quantity=quantity,
+            notes=notes,
+            status=status,
+            marketplace=marketplace,
+            marketplace_item_id=marketplace_item_id,
+            marketplace_sku=marketplace_sku,
+        )
         self.initialize()
         connection = self._connect()
         try:
@@ -182,19 +218,7 @@ class InventoryStore:
                     inventory_id, title, source, acquired_at, acquisition_cost_cents,
                     quantity, notes, status, marketplace, marketplace_item_id, marketplace_sku
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    inventory_id,
-                    title,
-                    source,
-                    acquired_at,
-                    cost_cents,
-                    quantity,
-                    notes,
-                    status,
-                    marketplace,
-                    marketplace_item_id,
-                    marketplace_sku,
-                ),
+                (inventory_id, *values.values()),
             )
             connection.execute(
                 "UPDATE inventory_id_sequence SET last_value = ? WHERE singleton = 1",
@@ -209,6 +233,76 @@ class InventoryStore:
             raise
         finally:
             connection.close()
+
+    def update(
+        self,
+        inventory_id: str,
+        *,
+        title: str | object = _UNSET,
+        source: str | object = _UNSET,
+        acquired_at: str | object = _UNSET,
+        acquisition_cost: str | Decimal | object = _UNSET,
+        quantity: int | object = _UNSET,
+        notes: str | object = _UNSET,
+        status: str | object = _UNSET,
+        marketplace: str | None | object = _UNSET,
+        marketplace_item_id: str | None | object = _UNSET,
+        marketplace_sku: str | None | object = _UNSET,
+    ) -> InventoryRecord:
+        """Apply a validated partial update without changing either record identifier."""
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM inventory_items WHERE inventory_id = ?", (inventory_id.upper(),)
+            ).fetchone()
+            if row is None:
+                raise InventoryNotFoundError(f"inventory item {inventory_id} was not found")
+            changes = {
+                "title": title,
+                "source": source,
+                "acquired_at": acquired_at,
+                "acquisition_cost": acquisition_cost,
+                "quantity": quantity,
+                "notes": notes,
+                "status": status,
+                "marketplace": marketplace,
+                "marketplace_item_id": marketplace_item_id,
+                "marketplace_sku": marketplace_sku,
+            }
+            existing = {
+                "title": row["title"],
+                "source": row["source"],
+                "acquired_at": row["acquired_at"],
+                "acquisition_cost": Decimal(row["acquisition_cost_cents"]) / 100,
+                "quantity": row["quantity"],
+                "notes": row["notes"],
+                "status": row["status"],
+                "marketplace": row["marketplace"],
+                "marketplace_item_id": row["marketplace_item_id"],
+                "marketplace_sku": row["marketplace_sku"],
+            }
+            candidate = {
+                name: existing[name] if value is _UNSET else value
+                for name, value in changes.items()
+            }
+            values = self._validate_values(**candidate)
+            connection.execute(
+                """UPDATE inventory_items SET
+                    title = ?, source = ?, acquired_at = ?, acquisition_cost_cents = ?,
+                    quantity = ?, notes = ?, status = ?, marketplace = ?,
+                    marketplace_item_id = ?, marketplace_sku = ?
+                WHERE internal_id = ?""",
+                (*values.values(), row["internal_id"]),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get(inventory_id)
 
     def get(self, inventory_id: str) -> InventoryRecord:
         self.initialize()
