@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 STATUS_TRANSITIONS = {
     "acquired": frozenset({"listed", "archived"}),
@@ -148,6 +148,27 @@ class InventoryStore:
                     + timestamp_check.format(column="sold_at")
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (2)")
+            if 3 not in versions:
+                duplicate = connection.execute(
+                    """SELECT marketplace, marketplace_sku
+                    FROM inventory_items
+                    WHERE marketplace IS NOT NULL AND marketplace_sku IS NOT NULL
+                    GROUP BY marketplace COLLATE NOCASE, marketplace_sku
+                    HAVING COUNT(*) > 1
+                    LIMIT 1"""
+                ).fetchone()
+                if duplicate is not None:
+                    raise RuntimeError(
+                        "inventory migration cannot enforce unique marketplace SKUs; "
+                        "resolve duplicate marketplace + SKU records first"
+                    )
+                connection.execute("DROP INDEX IF EXISTS inventory_marketplace_sku")
+                connection.execute(
+                    """CREATE UNIQUE INDEX inventory_marketplace_sku
+                    ON inventory_items (marketplace COLLATE NOCASE, marketplace_sku)
+                    WHERE marketplace IS NOT NULL AND marketplace_sku IS NOT NULL"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (3)")
             connection.commit()
         except Exception:
             connection.rollback()

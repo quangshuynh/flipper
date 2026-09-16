@@ -33,6 +33,7 @@ def test_empty_database_initializes_versioned_schema(tmp_path):
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT version FROM schema_migrations").fetchall() == [
             (1,),
+            (2,),
             (CURRENT_SCHEMA_VERSION,),
         ]
 
@@ -284,7 +285,54 @@ def test_v1_database_migrates_without_changing_existing_record(tmp_path):
         ).fetchall() == [
             (1,),
             (2,),
+            (3,),
         ]
+
+
+def test_marketplace_sku_is_unique_with_case_insensitive_marketplace(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    store.add(**values(marketplace="eBay", marketplace_sku="Q0001"))
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.add(**values(title="Duplicate", marketplace="EBAY", marketplace_sku="Q0001"))
+
+    assert (
+        store.add(
+            **values(title="Case distinct", marketplace="ebay", marketplace_sku="q0001")
+        ).inventory_id
+        == "Q0002"
+    )
+
+
+def test_v2_migration_rejects_duplicates_without_modifying_data(tmp_path):
+    database = tmp_path / "inventory.db"
+    store = InventoryStore(database)
+    store.initialize()
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+        connection.execute("DROP INDEX inventory_marketplace_sku")
+        connection.execute(
+            "CREATE INDEX inventory_marketplace_sku "
+            "ON inventory_items (marketplace, marketplace_sku)"
+        )
+        connection.execute(
+            """INSERT INTO inventory_items (
+                inventory_id, title, source, acquired_at, acquisition_cost_cents,
+                quantity, notes, status, marketplace, marketplace_sku
+            ) VALUES ('Q0001', 'One', 'sale', '2026-09-01', 100, 1, '', 'acquired',
+                      'eBay', 'same'),
+                     ('Q0002', 'Two', 'sale', '2026-09-01', 100, 1, '', 'acquired',
+                      'EBAY', 'same')"""
+        )
+
+    with pytest.raises(RuntimeError, match="duplicate marketplace \\+ SKU"):
+        store.initialize()
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone() == (2,)
+        assert connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall() == [(1,), (2,)]
 
 
 def test_lifecycle_transitions_set_utc_timestamps_and_preserve_identity(tmp_path):
