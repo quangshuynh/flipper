@@ -143,6 +143,16 @@ python main.py inventory list
 python main.py inventory show Q0001
 ```
 
+Existing records can be corrected or enriched with partial updates. Unspecified fields remain
+unchanged; pass an empty string to clear an optional marketplace field or notes.
+
+```bash
+python main.py inventory update Q0001 --status listed
+python main.py inventory update Q0001 --notes "Tested and ready to list"
+python main.py inventory update Q0001 --marketplace eBay --marketplace-item-id 123456789012 --marketplace-sku Q0001
+python main.py inventory update Q0001 --marketplace-item-id ""
+```
+
 An item can optionally retain marketplace linkage:
 
 ```bash

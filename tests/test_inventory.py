@@ -127,3 +127,104 @@ def test_temporary_databases_are_isolated(tmp_path):
     second = InventoryStore(tmp_path / "two.db")
     first.add(**values())
     assert second.list() == []
+
+
+def test_single_field_update_preserves_unspecified_fields_and_identity(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    original = store.add(**values(notes="old note"))
+
+    updated = store.update("Q0001", status="listed")
+
+    assert updated.status == "listed"
+    assert updated.title == original.title
+    assert updated.notes == "old note"
+    assert updated.inventory_id == original.inventory_id
+    assert updated.internal_id == original.internal_id
+
+
+def test_multiple_fields_and_exact_money_can_be_updated(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    store.add(**values())
+    updated = store.update(
+        "Q0001",
+        title="Updated recorder",
+        source="auction",
+        acquired_at="2026-09-02",
+        acquisition_cost="19.99",
+        quantity=2,
+        status="listed",
+        notes="tested",
+    )
+    assert updated.title == "Updated recorder"
+    assert updated.source == "auction"
+    assert updated.acquired_at == "2026-09-02"
+    assert updated.acquisition_cost == Decimal("19.99")
+    assert updated.quantity == 2
+    assert updated.status == "listed"
+    assert updated.notes == "tested"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"acquisition_cost": "-1"},
+        {"acquisition_cost": "1.001"},
+        {"quantity": 0},
+        {"status": "invalid"},
+        {"acquired_at": "September 1"},
+    ],
+)
+def test_invalid_update_rolls_back_without_partial_mutation(tmp_path, changes):
+    store = InventoryStore(tmp_path / "inventory.db")
+    original = store.add(**values())
+    changes["title"] = "must not persist"
+    with pytest.raises(InventoryValidationError):
+        store.update("Q0001", **changes)
+    assert store.get("Q0001") == original
+
+
+def test_unknown_item_cannot_be_updated(tmp_path):
+    with pytest.raises(InventoryNotFoundError, match="Q9999"):
+        InventoryStore(tmp_path / "inventory.db").update("Q9999", status="listed")
+
+
+def test_marketplace_fields_can_be_added_changed_and_cleared(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    store.add(**values())
+    linked = store.update(
+        "Q0001", marketplace="eBay", marketplace_item_id="123", marketplace_sku="Q0001"
+    )
+    assert (linked.marketplace, linked.marketplace_item_id, linked.marketplace_sku) == (
+        "eBay",
+        "123",
+        "Q0001",
+    )
+    changed = store.update("Q0001", marketplace_item_id="456", marketplace_sku="stock-1")
+    assert changed.marketplace_item_id == "456"
+    assert changed.marketplace_sku == "stock-1"
+    cleared = store.update("Q0001", marketplace=None, marketplace_item_id="", marketplace_sku=None)
+    assert (cleared.marketplace, cleared.marketplace_item_id, cleared.marketplace_sku) == (
+        None,
+        None,
+        None,
+    )
+
+
+def test_update_database_failure_rolls_back_all_fields(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    original = store.add(**values())
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_update BEFORE UPDATE ON inventory_items "
+            "BEGIN SELECT RAISE(ABORT, 'rejected'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.update("Q0001", title="changed", notes="changed")
+    assert store.get("Q0001") == original
+
+
+def test_updates_do_not_affect_allocation_sequence(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    store.add(**values())
+    store.update("Q0001", title="changed")
+    assert store.add(**values(title="Second")).inventory_id == "Q0002"

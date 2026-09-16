@@ -22,5 +22,9 @@ or an eBay listing-management tool.
   `pytest`, `ruff check .`, and `ruff format --check .` before handoff.
 - Make every persistent schema change through an ordered migration. Preserve old databases and
   test upgrades as migrations are added.
-- Keep runtime databases and local `context.md` uncommitted. Use normal commits; never force-push,
-  create a release, or add a tag unless explicitly requested.
+- Keep runtime databases and local `context.md` uncommitted. Treat `main` as the protected
+  integration branch: normally start feature, fix, refactor, and documentation work on a descriptive
+  branch from an up-to-date `main`. Use normal commits, push the branch to origin, and open a pull
+  request targeting `main`. Do not merge the PR unless the user explicitly requests it. Never
+  rewrite shared history or force-push unless the user explicitly authorizes it for a specific
+  reason. Do not create a release or tag unless explicitly requested.
