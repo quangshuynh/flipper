@@ -80,10 +80,10 @@ python -m pricing.market_updater
 ## eBay seller orders
 
 Seller OAuth is separate from the application token used by the Browse price updater and the
-application token used to verify deletion notifications. It authorizes Flipper to read orders
-belonging to one consenting seller. Flipper requests only
-`https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly`; it does not implement any eBay
-write operation.
+application token used to verify deletion notifications. It authorizes Flipper to read orders and
+financial transactions belonging to one consenting seller. Flipper requests only the
+`sell.fulfillment.readonly` and `sell.finances` scopes; it does not implement any eBay write
+operation.
 
 Configure these values in your uncommitted `.env` using credentials from one environment only:
 
@@ -126,8 +126,37 @@ responses. Remove the locally stored refresh token with `python main.py ebay dis
 not revoke consent at eBay; use your eBay account's third-party authorization settings when remote
 revocation is also desired.
 
-Order totals are buyer-facing order amounts, not net seller proceeds. Flipper does not yet retrieve
-fees, payouts, shipping-label costs, refunds/credits comprehensively, or calculate actual profit.
+### Read-only eBay Finances
+
+The Finances scope is part of the seller consent request. A refresh token created before Finances
+support was added does not gain the new scope automatically. Reconnect once to replace it:
+
+```bash
+python main.py ebay disconnect
+python main.py ebay connect
+```
+
+Review the consent screen, complete authorization, and paste the redirected URL as described above.
+Then retrieve the default recent 30-day window or an explicit inclusive date range:
+
+```bash
+python main.py ebay finances
+python main.py ebay finances --from 2026-09-01 --to 2026-09-16
+```
+
+Flipper follows all Finances pages and displays eBay's native transaction type, exact amount and
+currency, non-sensitive order references, native fee classifications, and any deterministic match
+to an existing local sale. It never matches by amount, title, buyer, or approximate date. Unknown
+eBay transaction types remain explicitly unknown/unsupported rather than being guessed.
+
+Finances transactions are not persisted and do not create or update sale costs, sales, inventory,
+or realized-profit figures. Output omits buyer usernames, names, contact details, addresses, payment
+credentials, and raw API responses. Currency conversion, payout reconciliation, and automatic
+accounting import are not implemented.
+
+Order totals are buyer-facing order amounts, not net seller proceeds. Finances data may report fees
+and other movements, but Flipper does not yet treat payouts as profit or import those movements into
+local sale economics.
 
 ## Local inventory
 

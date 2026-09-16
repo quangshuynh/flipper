@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import sqlite3
 
 import main
 import pytest
+from ebay.finance_transactions import normalize_transaction
 from ebay.orders import EbayOrder, EbayOrderLineItem, Money, OrderPricingSummary
 from ebay.seller_oauth import SellerNotConnectedError
 
@@ -10,6 +12,7 @@ from ebay.seller_oauth import SellerNotConnectedError
 class OAuth:
     class Config:
         api_host = "api.ebay.com"
+        environment = "production"
 
     config = Config()
 
@@ -230,3 +233,67 @@ def test_import_sales_repeat_reports_already_imported(monkeypatch, tmp_path, cap
     capsys.readouterr()
     assert main.main(args) == 0
     assert "1 already imported" in capsys.readouterr().out
+
+
+def test_finances_output_summary_is_pii_free_and_does_not_mutate_database(
+    monkeypatch, tmp_path, capsys
+):
+    database = tmp_path / "inventory.db"
+    store = main.InventoryStore(database)
+    store.add(
+        title="Sony Camera",
+        source="sale",
+        acquired_at="2026-09-01",
+        acquisition_cost="20",
+        marketplace="eBay",
+        marketplace_sku="CAM-1",
+    )
+    store.transition_status("Q0001", "listed")
+    store.import_sale(
+        inventory_id="Q0001",
+        marketplace="eBay",
+        external_order_id="12-34567-89012",
+        external_line_item_id="line-1",
+        marketplace_sku="CAM-1",
+        quantity=1,
+        gross_amount=Decimal("42.99"),
+        currency="USD",
+        sold_at=datetime(2026, 9, 15, tzinfo=timezone.utc),
+    )
+    with sqlite3.connect(database) as connection:
+        before = connection.iterdump()
+        snapshot = "\n".join(before)
+
+    transaction = normalize_transaction(
+        {
+            "transactionId": "tx-1",
+            "transactionType": "SALE",
+            "transactionDate": "2026-09-15T12:00:00.000Z",
+            "amount": {"value": "42.99", "currency": "USD"},
+            "orderId": "12-34567-89012",
+            "buyer": {"username": "private-buyer"},
+            "orderLineItems": [
+                {
+                    "orderLineItemId": "line-1",
+                    "fees": [{"feeType": "FINAL_VALUE_FEE"}],
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(main, "_seller_oauth", lambda: OAuth())
+    monkeypatch.setattr(
+        main.FinancesClient,
+        "get_transactions",
+        lambda self, start, end: [transaction],
+    )
+    assert main.main(["ebay", "finances", "--database", str(database)]) == 0
+    output = capsys.readouterr().out
+    assert "Transaction: tx-1" in output
+    assert "Sale: S000001" in output
+    assert "Match: matched" in output
+    assert "1 transactions | 1 matched" in output
+    assert "private-buyer" not in output
+
+    with sqlite3.connect(database) as connection:
+        after = "\n".join(connection.iterdump())
+    assert after == snapshot

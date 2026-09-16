@@ -13,6 +13,12 @@ from getpass import getpass
 from dotenv import load_dotenv
 
 from collectors.json_feed_collector import fetch_listings
+from ebay.finance_reconciliation import (
+    FinanceMatchStatus,
+    reconcile_finance_transactions,
+)
+from ebay.finance_transactions import FinanceTransaction
+from ebay.finances import FinancesApiError, FinancesClient
 from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
 from ebay.orders import EbayOrder, Money
 from ebay.reconciliation import ReconciliationStatus, reconcile_ebay_orders, summarize
@@ -252,6 +258,46 @@ def _print_sale_import(orders: list[EbayOrder], store: InventoryStore) -> bool:
     )
 
 
+def _print_finances(transactions: list[FinanceTransaction], sales) -> None:
+    matches = reconcile_finance_transactions(transactions, sales)
+    print("eBay Financial Transactions")
+    for result in matches:
+        transaction = result.transaction
+        print("")
+        print(f"Transaction: {transaction.transaction_id}")
+        print(f"Type: {transaction.native_type}")
+        if transaction.classification.value == "unknown":
+            print("Classification: unknown/unsupported")
+        else:
+            print(f"Classification: {transaction.classification.value.replace('_', ' ')}")
+        print(f"Date: {transaction.transaction_date.isoformat()}")
+        print(f"Amount: {transaction.amount.currency} {transaction.amount.value}")
+        print(f"Order: {transaction.order_id or 'not provided'}")
+        line_ids = ", ".join(line.order_line_item_id for line in transaction.order_lines)
+        print(f"Order line: {line_ids or 'not provided'}")
+        fee_types = sorted({fee for line in transaction.order_lines for fee in line.fee_types})
+        if fee_types:
+            print(f"eBay fee type: {', '.join(fee_types)}")
+        sale_ids = ", ".join(sale.sale_id for sale in result.sales)
+        print(f"Sale: {sale_ids or 'none'}")
+        print(f"Match: {result.status.value.replace('_', ' ')}")
+
+    counts = {status: 0 for status in FinanceMatchStatus}
+    for result in matches:
+        counts[result.status] += 1
+    unknown = sum(transaction.classification.value == "unknown" for transaction in transactions)
+    currencies = ", ".join(sorted({transaction.amount.currency for transaction in transactions}))
+    print("")
+    print(
+        "Summary: "
+        f"{len(matches)} transactions | {counts[FinanceMatchStatus.MATCHED]} matched | "
+        f"{counts[FinanceMatchStatus.UNMATCHED]} unmatched | "
+        f"{counts[FinanceMatchStatus.AMBIGUOUS]} ambiguous | "
+        f"{counts[FinanceMatchStatus.NOT_ENOUGH_IDENTIFIERS]} not enough identifiers | "
+        f"{unknown} unknown/unsupported | currencies: {currencies or 'none'}"
+    )
+
+
 def _parse_date(value: str) -> datetime:
     try:
         parsed = datetime.strptime(value, "%Y-%m-%d")
@@ -320,6 +366,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     import_sales.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
     import_sales.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    finances = ebay_commands.add_parser(
+        "finances", help="show read-only seller financial transactions"
+    )
+    finances.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
+    finances.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
+    finances.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory = commands.add_parser("inventory", help="manage local inventory")
     inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory_commands = inventory.add_subparsers(dest="inventory_command", required=True)
@@ -474,6 +526,12 @@ def run_ebay_command(args: argparse.Namespace) -> int:
             return 0
 
         start, end = _order_date_range(args.start, args.end)
+        if args.ebay_command == "finances":
+            if end - start > timedelta(days=1096):
+                raise SellerOAuthError("Finance date range cannot exceed eBay's 36-month window")
+            transactions = FinancesClient(oauth).get_transactions(start, end)
+            _print_finances(transactions, InventoryStore(args.database).list_sales())
+            return 0
         if end - start > timedelta(days=730):
             raise SellerOAuthError("Order date range cannot exceed eBay's two-year history window")
         orders = FulfillmentClient(oauth).get_orders(start, end)
@@ -485,7 +543,14 @@ def run_ebay_command(args: argparse.Namespace) -> int:
         else:
             _print_orders(orders)
         return 0
-    except (SellerOAuthError, FulfillmentApiError, ValueError, RuntimeError, sqlite3.Error) as exc:
+    except (
+        SellerOAuthError,
+        FulfillmentApiError,
+        FinancesApiError,
+        ValueError,
+        RuntimeError,
+        sqlite3.Error,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
