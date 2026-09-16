@@ -149,14 +149,40 @@ currency, non-sensitive order references, native fee classifications, and any de
 to an existing local sale. It never matches by amount, title, buyer, or approximate date. Unknown
 eBay transaction types remain explicitly unknown/unsupported rather than being guessed.
 
-Finances transactions are not persisted and do not create or update sale costs, sales, inventory,
-or realized-profit figures. Output omits buyer usernames, names, contact details, addresses, payment
-credentials, and raw API responses. Currency conversion, payout reconciliation, and automatic
-accounting import are not implemented.
+The `ebay finances` command does not persist transactions or create or update sale costs, sales,
+inventory, or realized-profit figures. Output omits buyer usernames, names, contact details,
+addresses, payment credentials, and raw API responses. This command remains strictly read-only.
 
 Order totals are buyer-facing order amounts, not net seller proceeds. Finances data may report fees
-and other movements, but Flipper does not yet treat payouts as profit or import those movements into
-local sale economics.
+and other movements, but Flipper never treats payouts as profit. To explicitly import the narrow set
+of supported accounting components, use a separate command:
+
+```bash
+python main.py ebay import-finances
+python main.py ebay import-finances --from 2026-09-01 --to 2026-09-16
+```
+
+The accounting import reuses the same OAuth, pagination, dates, normalization, and exact sale
+reconciliation as the read-only view. It imports only these deterministically matched semantics:
+
+- documented order-line selling fees (`FINAL_VALUE_FEE`, fixed-per-order and shipping variants,
+  below-standard and high-item-not-as-described variants, international, payment-processing,
+  advertising, premium-ad, and regulatory-operating fees) as `marketplace_fee`; and
+- a native `REFUND` with `bookingEntry=DEBIT` as `refund`.
+
+Native `SALE` gross amounts are not costs and are never imported. Credits and fee credits,
+payouts/transfers, disputes, shipping-label transactions, taxes, purchases, withdrawals,
+non-sale charges, donations, listing/subscription fees, opaque `OTHER_FEES`, adjustments, unknown
+types, amount-less fees, and zero-value components remain unsupported. Flipper does not guess at
+their economics, infer seller shipping expense from buyer-paid shipping, or convert currencies.
+
+Each imported component has `source=ebay_finances` plus a non-sensitive eBay transaction ID and a
+deterministic component key. A database uniqueness constraint makes identical re-imports no-ops;
+changed immutable accounting data for an existing external identity is reported as a conflict and
+is not overwritten. Unmatched, ambiguous, and insufficiently identified transactions are reported
+without importing. Each supported component is its own SQLite transaction, so failures are explicit
+and cannot leave a partial component. Imported external history is protected from the manual
+`sales remove-cost` command.
 
 ## Local inventory
 
@@ -256,14 +282,16 @@ Component amounts are always nonnegative; every currently supported type reduces
 avoids double-negative entries. Each component has a stable local C-number, sale link, exact scaled
 integer amount, currency, source, optional note, and creation time. CLI entries are marked
 `source=manual`; they are not verified against eBay. Removing a mistaken component does not reuse
-its C-number.
+its C-number. Finances-imported components instead show `source=ebay_finances` and their eBay
+transaction ID; manual and imported components remain independent even when their amounts match.
 
 The displayed recorded realized profit is gross sale amount minus acquisition cost and all recorded
 components. No stored profit total is cached or mutated. A missing fee, shipping, or refund entry
 means only that no such cost has been recorded—not that the true cost was zero—so the display marks
 the result as incompletely reconciled. Acquisition cost is currently USD; Flipper will not calculate
-profit for a sale in another currency and never performs currency conversion. eBay Finances,
-automatic fee/refund import, payouts, and full reconciliation remain deferred.
+profit for a sale in another currency and never performs currency conversion. Importing some eBay
+fees or refunds does not prove completeness: seller-paid shipping, unsupported credits or reversals,
+and other costs can still be absent. Payout accounting and full reconciliation remain deferred.
 
 ## eBay account deletion notifications
 

@@ -44,9 +44,19 @@ class FinanceMoney:
 
 
 @dataclass(frozen=True)
+class FinanceFee:
+    native_type: str
+    amount: FinanceMoney | None
+
+
+@dataclass(frozen=True)
 class FinanceOrderLine:
     order_line_item_id: str
-    fee_types: tuple[str, ...] = ()
+    fees: tuple[FinanceFee, ...] = ()
+
+    @property
+    def fee_types(self) -> tuple[str, ...]:
+        return tuple(fee.native_type for fee in self.fees)
 
 
 @dataclass(frozen=True)
@@ -111,14 +121,21 @@ def normalize_transaction(raw: Any) -> FinanceTransaction:
         raw_fees = raw_line.get("fees", [])
         if not isinstance(raw_fees, list):
             raise FinanceResponseError("eBay returned malformed fee details")
-        fee_types = tuple(
-            fee_type
-            for fee in raw_fees
-            if isinstance(fee, dict)
-            and isinstance((fee_type := fee.get("feeType")), str)
-            and fee_type
-        )
-        lines.append(FinanceOrderLine(line_id, fee_types))
+        fees = []
+        for fee in raw_fees:
+            if not isinstance(fee, dict):
+                continue
+            fee_type = fee.get("feeType")
+            if not isinstance(fee_type, str) or not fee_type:
+                continue
+            try:
+                amount = _money(fee.get("amount"))
+            except FinanceResponseError:
+                # Keep the native fee classification visible to the read-only command,
+                # but an amount-less fee can never become an accounting component.
+                amount = None
+            fees.append(FinanceFee(fee_type, amount))
+        lines.append(FinanceOrderLine(line_id, tuple(fees)))
 
     reference = raw.get("references") or raw.get("reference") or {}
     if isinstance(reference, list):

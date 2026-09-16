@@ -242,8 +242,12 @@ def test_v3_database_migrates_to_sales_schema(tmp_path):
     store.initialize()
     with sqlite3.connect(database) as connection:
         connection.execute("DROP TRIGGER sale_cost_currency_matches_sale")
+        connection.execute("DROP TRIGGER sale_cost_external_identity_insert")
+        connection.execute("DROP TRIGGER sale_cost_external_identity_update")
+        connection.execute("DROP INDEX sale_costs_external_identity")
         connection.execute("DROP TABLE sale_costs")
         connection.execute("DROP TABLE sale_cost_id_sequence")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
         connection.execute("DELETE FROM schema_migrations WHERE version = 5")
         connection.execute("DELETE FROM schema_migrations WHERE version = 4")
         connection.execute("DROP TABLE sales")
@@ -252,7 +256,7 @@ def test_v3_database_migrates_to_sales_schema(tmp_path):
     with sqlite3.connect(database) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sales'"
         ).fetchone() == ("sales",)
