@@ -1,4 +1,6 @@
-# Flipper
+<p align="center">
+  <img src="docs/images/flipper-logo.png" alt="flipper" width="256">
+</p>
 
 [![CI](https://github.com/quangshuynh/flipper/actions/workflows/ci.yml/badge.svg)](https://github.com/quangshuynh/flipper/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
