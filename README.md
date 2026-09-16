@@ -26,6 +26,53 @@ flowchart TD
 
 The deterministic parser runs first. AI enrichment is optional and only fills missing values. If AI, market data, or Discord is unavailable, the local analysis path can continue.
 
+## Web dashboard
+
+Flipper includes a server-rendered local operations dashboard over the same durable inventory,
+sale economics, reconciliation, and reporting services used by the CLI. Start it on the loopback
+interface with:
+
+```bash
+uvicorn web.app:app --reload --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000`. The dashboard uses
+`data/flipper_inventory.db` by default. For development or an isolated database, set
+`FLIPPER_INVENTORY_DB` to another path before starting the server.
+
+The web application has no JavaScript build step. FastAPI renders Jinja templates and serves one
+local CSS asset, which keeps a single Python backend and prevents browser code from accessing
+SQLite or duplicating accounting formulas. Pages include:
+
+- **Dashboard:** active inventory, tied-up capital, gross sales, recorded and fully reconciled
+  profit, recorded margin, reconciliation attention, and recent activity.
+- **Inventory:** searchable/filterable/sortable durable records with lifecycle, aging, marketplace
+  linkage, linked sales, and detail views.
+- **Sales:** sale-level economics, reconciliation state, missing confirmations, component
+  provenance, and reversal relationships.
+- **Analytics:** currency-separated sales and profit over time, inventory/reconciliation
+  distributions, and defensible holding-period summaries.
+- **Analyze:** a lightweight entry point documenting the supported existing local analyzer.
+- **Integrations / Settings:** safe eBay environment, configuration, and connection status plus
+  secure CLI connection actions.
+
+For web development, run the same project checks used by CI:
+
+```bash
+pytest
+ruff check .
+ruff format --check .
+```
+
+The web UI is local-first and has no authentication layer; keep the development server bound to
+`127.0.0.1`. It does not display buyer/customer data, addresses, payment details, raw marketplace
+payloads, OAuth tokens, secrets, or credential-store values. The existing eBay deletion callback
+remains available at `/api/ebay/account-deletion` on `web.app:app`, while the production-compatible
+`ebay.compliance:app` entry point remains unchanged.
+
+Web editing, browser-based OAuth, full analyzer forms, historical sell-through, currency
+conversion, payout reconciliation, and background marketplace sync are intentionally deferred.
+
 ## Pricing
 
 The estimator combines component heuristics with locally stored market prices when a matching database row exists. Market data is preferred; static component values are a fallback. eBay Browse results are active listing prices, not completed-sale prices, so estimates should be treated as directional.
