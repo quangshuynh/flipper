@@ -16,6 +16,8 @@ from keyring.errors import KeyringError
 
 
 FULFILLMENT_READONLY_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly"
+FINANCES_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.finances"
+SELLER_SCOPES = (FULFILLMENT_READONLY_SCOPE, FINANCES_SCOPE)
 REQUEST_TIMEOUT_SECONDS = 15
 EXPIRY_SKEW_SECONDS = 60
 
@@ -102,7 +104,7 @@ class SellerOAuthClient:
                 "client_id": self.config.client_id,
                 "redirect_uri": self.config.runame,
                 "response_type": "code",
-                "scope": FULFILLMENT_READONLY_SCOPE,
+                "scope": " ".join(SELLER_SCOPES),
                 "state": state,
             }
         )
@@ -140,7 +142,8 @@ class SellerOAuthClient:
                 f"eBay {action} failed due to a network or response error"
             ) from exc
         if response.status_code >= 400:
-            if isinstance(body, dict) and body.get("error") == "invalid_grant":
+            oauth_error = body.get("error") if isinstance(body, dict) else None
+            if oauth_error in {"invalid_grant", "invalid_scope"}:
                 detail = "; reconnect the eBay seller account" if action == "token refresh" else ""
                 raise SellerOAuthError(f"eBay {action} was rejected{detail}")
             raise SellerOAuthError(f"eBay {action} failed (HTTP {response.status_code})")
@@ -194,7 +197,7 @@ class SellerOAuthClient:
             {
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
-                "scope": FULFILLMENT_READONLY_SCOPE,
+                "scope": " ".join(SELLER_SCOPES),
             },
             "token refresh",
         )

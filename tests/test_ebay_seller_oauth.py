@@ -3,7 +3,9 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from ebay.seller_oauth import (
+    FINANCES_SCOPE,
     FULFILLMENT_READONLY_SCOPE,
+    SELLER_SCOPES,
     SellerNotConnectedError,
     SellerOAuthClient,
     SellerOAuthConfig,
@@ -60,7 +62,7 @@ def test_authorization_url_has_exact_scope_and_state():
         "client_id": ["client"],
         "redirect_uri": ["the-runame"],
         "response_type": ["code"],
-        "scope": [FULFILLMENT_READONLY_SCOPE],
+        "scope": [" ".join(SELLER_SCOPES)],
         "state": ["state-value"],
     }
 
@@ -95,7 +97,8 @@ def test_refreshes_near_expiry_and_uses_required_scope():
     assert oauth.access_token() == "first"
     now[0] = 161
     assert oauth.access_token() == "second"
-    assert oauth._session.calls[-1][1]["data"]["scope"] == FULFILLMENT_READONLY_SCOPE
+    assert oauth._session.calls[-1][1]["data"]["scope"] == " ".join(SELLER_SCOPES)
+    assert set(SELLER_SCOPES) == {FULFILLMENT_READONLY_SCOPE, FINANCES_SCOPE}
 
 
 def test_disconnected_and_revoked_refresh_are_safe():
@@ -109,6 +112,13 @@ def test_disconnected_and_revoked_refresh_are_safe():
     with pytest.raises(SellerOAuthError) as error:
         oauth.access_token()
     assert "refresh-secret" not in str(error.value)
+
+
+def test_old_refresh_token_scope_failure_requests_reconnect():
+    oauth = client([Response(400, {"error": "invalid_scope"})])
+    oauth._store.set_password(oauth._service, "client", "old-refresh-secret")
+    with pytest.raises(SellerOAuthError, match="reconnect"):
+        oauth.access_token()
 
 
 def test_failed_exchange_does_not_leak_code_or_secret():
