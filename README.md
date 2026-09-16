@@ -211,8 +211,30 @@ used.
 Persisted sales contain only the linked local inventory key/Q-number, marketplace, eBay order and
 line identifiers, SKU, quantity, gross amount and currency, sale time, and import time. Buyer names,
 usernames, email, phone, recipient, and address data are not retained. Gross sale value is not
-realized profit: eBay fees, payouts, shipping costs, refunds, fee credits, and other expenses are not
-represented yet.
+profit. Acquisition cost is included in the local recorded-profit calculation, while marketplace
+fees, seller-paid shipping, refunds, and other reducing adjustments are stored as separate explicit
+components:
+
+```bash
+python main.py sales add-cost S000001 --type marketplace_fee --amount 10.44
+python main.py sales add-cost S000001 --type shipping_cost --amount 7.25
+python main.py sales add-cost S000001 --type refund --amount 5.00 --note "partial refund"
+python main.py sales show S000001
+python main.py sales remove-cost C000001
+```
+
+Component amounts are always nonnegative; every currently supported type reduces proceeds. This
+avoids double-negative entries. Each component has a stable local C-number, sale link, exact scaled
+integer amount, currency, source, optional note, and creation time. CLI entries are marked
+`source=manual`; they are not verified against eBay. Removing a mistaken component does not reuse
+its C-number.
+
+The displayed recorded realized profit is gross sale amount minus acquisition cost and all recorded
+components. No stored profit total is cached or mutated. A missing fee, shipping, or refund entry
+means only that no such cost has been recorded—not that the true cost was zero—so the display marks
+the result as incompletely reconciled. Acquisition cost is currently USD; Flipper will not calculate
+profit for a sale in another currency and never performs currency conversion. eBay Finances,
+automatic fee/refund import, payouts, and full reconciliation remain deferred.
 
 ## eBay account deletion notifications
 

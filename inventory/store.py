@@ -8,8 +8,10 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
+SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
+SALE_COST_SOURCES = ("manual", "ebay_finances")
 STATUS_TRANSITIONS = {
     "acquired": frozenset({"listed", "archived"}),
     "listed": frozenset({"acquired", "sold", "archived"}),
@@ -37,6 +39,14 @@ class SaleImportError(ValueError):
 
 class SaleConflictError(SaleImportError):
     """An external sale identity conflicts with its persisted economics."""
+
+
+class SaleCostNotFoundError(LookupError):
+    """No sale cost component has the requested stable identifier."""
+
+
+class SaleCostValidationError(ValueError):
+    """A sale cost component is invalid."""
 
 
 @dataclass(frozen=True)
@@ -85,6 +95,27 @@ class SaleRecord:
     @property
     def gross_amount(self) -> Decimal:
         return Decimal(self.gross_amount_minor).scaleb(-self.gross_amount_scale)
+
+
+@dataclass(frozen=True)
+class SaleCostRecord:
+    """An explicit nonnegative economic component that reduces sale proceeds."""
+
+    internal_id: int
+    cost_id: str
+    sale_internal_id: int
+    sale_id: str
+    category: str
+    amount_minor: int
+    amount_scale: int
+    currency: str
+    source: str
+    note: str
+    created_at: str
+
+    @property
+    def amount(self) -> Decimal:
+        return Decimal(self.amount_minor).scaleb(-self.amount_scale)
 
 
 def parse_usd_cents(value: str | Decimal) -> int:
@@ -249,6 +280,51 @@ class InventoryStore:
                     "CREATE INDEX sales_inventory_internal_id ON sales (inventory_internal_id)"
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (4)")
+            if 5 not in versions:
+                connection.execute(
+                    """CREATE TABLE sale_cost_id_sequence (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        last_value INTEGER NOT NULL CHECK (last_value >= 0)
+                    )"""
+                )
+                connection.execute(
+                    "INSERT INTO sale_cost_id_sequence (singleton, last_value) VALUES (1, 0)"
+                )
+                connection.execute(
+                    """CREATE TABLE sale_costs (
+                        internal_id INTEGER PRIMARY KEY,
+                        cost_id TEXT NOT NULL UNIQUE,
+                        sale_internal_id INTEGER NOT NULL,
+                        category TEXT NOT NULL CHECK (category IN (
+                            'marketplace_fee', 'shipping_cost', 'refund', 'other_adjustment'
+                        )),
+                        amount_minor INTEGER NOT NULL CHECK (amount_minor >= 0),
+                        amount_scale INTEGER NOT NULL CHECK (amount_scale BETWEEN 0 AND 9),
+                        currency TEXT NOT NULL
+                            CHECK (length(currency) = 3 AND currency = upper(currency)),
+                        source TEXT NOT NULL CHECK (source IN ('manual', 'ebay_finances')),
+                        note TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL
+                            CHECK (length(created_at) = 20 AND substr(created_at, 11, 1) = 'T'
+                                   AND substr(created_at, -1) = 'Z'),
+                        FOREIGN KEY (sale_internal_id) REFERENCES sales(internal_id)
+                            ON DELETE RESTRICT
+                    )"""
+                )
+                connection.execute(
+                    "CREATE INDEX sale_costs_sale_internal_id ON sale_costs (sale_internal_id)"
+                )
+                connection.execute(
+                    """CREATE TRIGGER sale_cost_currency_matches_sale
+                    BEFORE INSERT ON sale_costs
+                    WHEN NEW.currency != (
+                        SELECT currency FROM sales WHERE internal_id = NEW.sale_internal_id
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'sale cost currency must match sale currency');
+                    END"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (5)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -654,6 +730,143 @@ class InventoryStore:
                 ORDER BY sales.internal_id"""
             ).fetchall()
         return [self._sale_record(row) for row in rows]
+
+    def add_sale_cost(
+        self,
+        sale_id: str,
+        *,
+        category: str,
+        amount: Decimal,
+        currency: str | None = None,
+        source: str = "manual",
+        note: str = "",
+    ) -> SaleCostRecord:
+        """Persist one explicit, nonnegative component that reduces proceeds."""
+        if category not in SALE_COST_TYPES:
+            raise SaleCostValidationError(f"cost type must be one of: {', '.join(SALE_COST_TYPES)}")
+        if source not in SALE_COST_SOURCES:
+            raise SaleCostValidationError(
+                f"cost source must be one of: {', '.join(SALE_COST_SOURCES)}"
+            )
+        try:
+            amount_minor, amount_scale = self._scaled_amount(amount)
+        except SaleImportError as exc:
+            raise SaleCostValidationError(str(exc).replace("gross item", "cost")) from exc
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            sale = connection.execute(
+                "SELECT * FROM sales WHERE sale_id = ?", (sale_id.upper(),)
+            ).fetchone()
+            if sale is None:
+                raise SaleNotFoundError(f"sale {sale_id} was not found")
+            component_currency = (currency or sale["currency"]).strip().upper()
+            if component_currency != sale["currency"]:
+                raise SaleCostValidationError(
+                    f"cost currency {component_currency} does not match sale currency "
+                    f"{sale['currency']}; currency conversion is not supported"
+                )
+            next_value = connection.execute(
+                "SELECT last_value + 1 FROM sale_cost_id_sequence WHERE singleton = 1"
+            ).fetchone()[0]
+            cost_id = f"C{next_value:06d}"
+            cursor = connection.execute(
+                """INSERT INTO sale_costs (
+                    cost_id, sale_internal_id, category, amount_minor, amount_scale,
+                    currency, source, note, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    cost_id,
+                    sale["internal_id"],
+                    category,
+                    amount_minor,
+                    amount_scale,
+                    component_currency,
+                    source,
+                    note.strip(),
+                    self._utc_now(),
+                ),
+            )
+            connection.execute(
+                "UPDATE sale_cost_id_sequence SET last_value = ? WHERE singleton = 1",
+                (next_value,),
+            )
+            connection.commit()
+            internal_id = cursor.lastrowid
+            assert internal_id is not None
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_sale_cost(cost_id)
+
+    def get_sale_cost(self, cost_id: str) -> SaleCostRecord:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT sale_costs.*, sales.sale_id
+                FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
+                WHERE cost_id = ?""",
+                (cost_id.upper(),),
+            ).fetchone()
+        if row is None:
+            raise SaleCostNotFoundError(f"sale cost {cost_id} was not found")
+        return self._sale_cost_record(row)
+
+    def list_sale_costs(self, sale_id: str) -> list[SaleCostRecord]:
+        sale = self.get_sale(sale_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT sale_costs.*, sales.sale_id
+                FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
+                WHERE sale_internal_id = ? ORDER BY sale_costs.internal_id""",
+                (sale.internal_id,),
+            ).fetchall()
+        return [self._sale_cost_record(row) for row in rows]
+
+    def remove_sale_cost(self, cost_id: str) -> SaleCostRecord:
+        """Remove an erroneous component without reusing its stable identifier."""
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT sale_costs.*, sales.sale_id
+                FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
+                WHERE cost_id = ?""",
+                (cost_id.upper(),),
+            ).fetchone()
+            if row is None:
+                raise SaleCostNotFoundError(f"sale cost {cost_id} was not found")
+            record = self._sale_cost_record(row)
+            connection.execute(
+                "DELETE FROM sale_costs WHERE internal_id = ?", (row["internal_id"],)
+            )
+            connection.commit()
+            return record
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _sale_cost_record(row: sqlite3.Row) -> SaleCostRecord:
+        return SaleCostRecord(
+            internal_id=row["internal_id"],
+            cost_id=row["cost_id"],
+            sale_internal_id=row["sale_internal_id"],
+            sale_id=row["sale_id"],
+            category=row["category"],
+            amount_minor=row["amount_minor"],
+            amount_scale=row["amount_scale"],
+            currency=row["currency"],
+            source=row["source"],
+            note=row["note"],
+            created_at=row["created_at"],
+        )
 
     @staticmethod
     def _sale_record(row: sqlite3.Row) -> SaleRecord:
