@@ -238,7 +238,6 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--cost", required=True, help="acquisition cost in USD")
     add.add_argument("--quantity", type=int, default=1)
     add.add_argument("--notes", default="")
-    add.add_argument("--status", choices=VALID_STATUSES, default="acquired")
     add.add_argument("--marketplace")
     add.add_argument("--marketplace-item-id")
     add.add_argument("--marketplace-sku")
@@ -253,10 +252,12 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--cost", dest="acquisition_cost", help="acquisition cost in USD")
     update.add_argument("--quantity", type=int)
     update.add_argument("--notes")
-    update.add_argument("--status", choices=VALID_STATUSES)
     update.add_argument("--marketplace")
     update.add_argument("--marketplace-item-id")
     update.add_argument("--marketplace-sku")
+    status = inventory_commands.add_parser("status", help="transition inventory lifecycle status")
+    status.add_argument("inventory_id")
+    status.add_argument("status", choices=VALID_STATUSES)
     return parser
 
 
@@ -271,7 +272,6 @@ def run_inventory_command(args: argparse.Namespace) -> int:
                 acquisition_cost=args.cost,
                 quantity=args.quantity,
                 notes=args.notes,
-                status=args.status,
                 marketplace=args.marketplace,
                 marketplace_item_id=args.marketplace_item_id,
                 marketplace_sku=args.marketplace_sku,
@@ -302,7 +302,6 @@ def run_inventory_command(args: argparse.Namespace) -> int:
                     "acquisition_cost",
                     "quantity",
                     "notes",
-                    "status",
                     "marketplace",
                     "marketplace_item_id",
                     "marketplace_sku",
@@ -317,6 +316,11 @@ def run_inventory_command(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.inventory_command == "status":
+            record = store.transition_status(args.inventory_id, args.status)
+            print(f"Inventory item {record.inventory_id}: {record.status}")
+            return 0
+
         record = store.get(args.inventory_id)
         print(f"{record.inventory_id}: {record.title}")
         print("Acquisition")
@@ -325,6 +329,8 @@ def run_inventory_command(args: argparse.Namespace) -> int:
         print(f"  Cost (USD): ${record.acquisition_cost:.2f}")
         print(f"  Quantity: {record.quantity}")
         print(f"  Status: {record.status}")
+        print(f"  Listed at (UTC): {record.listed_at or 'none'}")
+        print(f"  Sold at (UTC): {record.sold_at or 'none'}")
         print(f"  Notes: {record.notes or 'none'}")
         print("Marketplace linkage")
         print(f"  Marketplace: {record.marketplace or 'none'}")
