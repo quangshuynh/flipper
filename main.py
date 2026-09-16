@@ -1,18 +1,25 @@
-"""
-Main entry point for Flipper MVP.
-"""
+"""Main entry point for Flipper."""
 
+import argparse
 import os
+import sys
+import webbrowser
+from datetime import datetime, timedelta, timezone
+from getpass import getpass
+
 from dotenv import load_dotenv
 
 from collectors.json_feed_collector import fetch_listings
-from parser.extractor import extract_specs
-from parser.ai_enricher import enrich_specs_with_ai
-from pricing.estimator import estimate_market_value, calculate_pricing_result, score_deal
-from notifier.discord_notifier import send_deal_to_discord
-from utils.distance import compute_distance_miles
-from utils.dedupe import init_db, has_seen, mark_seen
+from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
+from ebay.orders import EbayOrder, Money
+from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from models import DealEvaluation
+from parser.ai_enricher import enrich_specs_with_ai
+from notifier.discord_notifier import send_deal_to_discord
+from parser.extractor import extract_specs
+from pricing.estimator import calculate_pricing_result, estimate_market_value, score_deal
+from utils.dedupe import init_db, has_seen, mark_seen
+from utils.distance import compute_distance_miles
 
 
 def run() -> None:
@@ -73,14 +80,12 @@ def run() -> None:
 
         estimated_value = estimate_market_value(specs)
         pricing = calculate_pricing_result(estimated_value, listing.price)
-
         score, profit = score_deal(
             asking_price=listing.price,
             estimated_value=estimated_value,
             specs=specs,
             distance_miles=distance_miles,
         )
-
         deal = DealEvaluation(
             listing=listing,
             specs=specs,
@@ -93,31 +98,23 @@ def run() -> None:
             estimated_roi=pricing.estimated_roi,
             score=score,
         )
-
         print(
-            f"[{listing.listing_id}] "
-            f"listing_price=${listing.price:.2f}, "
-            f"estimated_value=${estimated_value:.2f}, "
-            f"ideal_buy=${pricing.ideal_buy_price:.2f}, "
-            f"expected_resale=${pricing.expected_resale_value:.2f}, "
-            f"gross_profit=${profit:.2f}, "
+            f"[{listing.listing_id}] listing_price=${listing.price:.2f}, "
+            f"estimated_value=${estimated_value:.2f}, ideal_buy=${pricing.ideal_buy_price:.2f}, "
+            f"expected_resale=${pricing.expected_resale_value:.2f}, gross_profit=${profit:.2f}, "
             f"score={score}"
         )
-
         if profit >= min_profit and score >= min_score:
             print(
-                f"Listing PASSED filters "
-                f"(profit {profit:.2f} >= {min_profit:.2f}, score {score} >= {min_score})"
+                f"Listing PASSED filters (profit {profit:.2f} >= {min_profit:.2f}, "
+                f"score {score} >= {min_score})"
             )
-
             if not webhook_url:
                 print("Alert skipped because Discord is not configured.")
                 continue
-
             success = send_deal_to_discord(
                 webhook_url=webhook_url, deal=deal, ai_summary=ai_summary
             )
-
             if success:
                 print(f"Sent deal alert for {listing.listing_id}")
                 mark_seen(listing.listing_id)
@@ -126,12 +123,110 @@ def run() -> None:
                 print("Not marking as seen so it can retry next run.")
         else:
             print(
-                f"Listing FAILED filters "
-                f"(profit {profit:.2f} < {min_profit:.2f} "
+                f"Listing FAILED filters (profit {profit:.2f} < {min_profit:.2f} "
                 f"or score {score} < {min_score})"
             )
             mark_seen(listing.listing_id)
 
 
-if __name__ == "__main__":
+def _seller_oauth() -> SellerOAuthClient:
+    return SellerOAuthClient(SellerOAuthConfig.from_environment())
+
+
+def _format_money(value: Money | None) -> str:
+    if value is None:
+        return "not provided"
+    symbols = {"USD": "$", "CAD": "C$", "GBP": "£", "EUR": "€"}
+    prefix = symbols.get(value.currency, f"{value.currency} ")
+    return f"{prefix}{value.value:.2f}"
+
+
+def _print_orders(orders: list[EbayOrder]) -> None:
+    print("Recent eBay Orders")
+    if not orders:
+        print("\nNo orders found in the selected date range.")
+        return
+    for order in orders:
+        print(f"\n{order.creation_date.date().isoformat()}")
+        for item in order.line_items:
+            print(item.title)
+            details = f"Qty: {item.quantity}"
+            if item.sku:
+                details += f" | SKU: {item.sku}"
+            print(details)
+        print(f"Order total: {_format_money(order.pricing.total)}")
+        print(f"Fulfillment: {order.fulfillment_status or 'not provided'}")
+        print(f"Payment: {order.payment_status or 'not provided'}")
+        if order.cancellation_status:
+            print(f"Cancellation: {order.cancellation_status}")
+        print(f"Order: {order.order_id}")
+
+
+def _parse_date(value: str) -> datetime:
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("dates must use YYYY-MM-DD") from exc
+    return parsed.replace(tzinfo=timezone.utc)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Flipper resale analysis CLI")
+    commands = parser.add_subparsers(dest="command")
+    ebay = commands.add_parser("ebay", help="eBay seller integration")
+    ebay_commands = ebay.add_subparsers(dest="ebay_command", required=True)
+    ebay_commands.add_parser("connect", help="authorize a seller account")
+    ebay_commands.add_parser("disconnect", help="remove local seller authorization")
+    orders = ebay_commands.add_parser("orders", help="show recent seller orders")
+    orders.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
+    orders.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
+    return parser
+
+
+def run_ebay_command(args: argparse.Namespace) -> int:
+    try:
+        oauth = _seller_oauth()
+        if args.ebay_command == "connect":
+            state = oauth.new_state()
+            url = oauth.authorization_url(state)
+            print("Open this URL to authorize Flipper with eBay:")
+            print(url)
+            webbrowser.open(url)
+            redirected_url = getpass(
+                "Paste the full URL eBay redirected you to (input hidden): "
+            ).strip()
+            code = oauth.parse_redirect(redirected_url, state)
+            oauth.exchange_code(code)
+            print("eBay seller account connected. Refresh token stored in the OS credential store.")
+            return 0
+        if args.ebay_command == "disconnect":
+            if oauth.disconnect():
+                print("Local eBay seller authorization removed.")
+            else:
+                print("No local eBay seller authorization was stored.")
+            return 0
+
+        now = datetime.now(timezone.utc)
+        end = (args.end + timedelta(days=1)) if args.end else now
+        start = args.start or (end - timedelta(days=30))
+        if end - start > timedelta(days=730):
+            raise SellerOAuthError("Order date range cannot exceed eBay's two-year history window")
+        orders = FulfillmentClient(oauth).get_orders(start, end)
+        _print_orders(orders)
+        return 0
+    except (SellerOAuthError, FulfillmentApiError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    load_dotenv()
+    args = build_parser().parse_args(argv)
+    if args.command == "ebay":
+        return run_ebay_command(args)
     run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

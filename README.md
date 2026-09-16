@@ -73,6 +73,58 @@ Discord is disabled when `DISCORD_WEBHOOK_URL` is empty. eBay price refresh is a
 python -m pricing.market_updater
 ```
 
+## eBay seller orders
+
+Seller OAuth is separate from the application token used by the Browse price updater and the
+application token used to verify deletion notifications. It authorizes Flipper to read orders
+belonging to one consenting seller. Flipper requests only
+`https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly`; it does not implement any eBay
+write operation.
+
+Configure these values in your uncommitted `.env` using credentials from one environment only:
+
+```dotenv
+EBAY_SELLER_ENV=production
+EBAY_SELLER_CLIENT_ID=
+EBAY_SELLER_CLIENT_SECRET=
+EBAY_SELLER_RUNAME=
+```
+
+In the eBay Developer Portal, open the matching Production keyset under **Application Keys**, then
+**User Tokens**. Create or select a Redirect URL, configure its real Auth Accepted and Auth Declined
+URLs (and the requested policy/contact fields), and copy the eBay-generated RuName into
+`EBAY_SELLER_RUNAME`. A RuName is not an arbitrary callback URL and Production and Sandbox RuNames
+are different.
+
+Start the one-time consent flow with:
+
+```bash
+python main.py ebay connect
+```
+
+Flipper opens and prints eBay's consent URL. After consent, copy the full redirected URL from the
+browser and paste it into the waiting CLI. The CLI verifies OAuth state and immediately exchanges
+the short-lived code (the pasted URL is hidden at the prompt). It stores the long-lived refresh
+token in the operating system credential store through `keyring`; the authorization code is not
+stored, and User access tokens remain only in process memory and refresh automatically. Do not
+place any token in `.env`.
+
+Retrieve the most recent 30 days of orders, or specify an inclusive eBay-supported creation range:
+
+```bash
+python main.py ebay orders
+python main.py ebay orders --from 2026-09-01 --to 2026-09-16
+```
+
+The client follows every Fulfillment API page. eBay currently limits searchable order history to
+two years. Output excludes buyer names, addresses, email addresses, phone numbers, and raw API
+responses. Remove the locally stored refresh token with `python main.py ebay disconnect`. This does
+not revoke consent at eBay; use your eBay account's third-party authorization settings when remote
+revocation is also desired.
+
+Order totals are buyer-facing order amounts, not net seller proceeds. Flipper does not yet retrieve
+fees, payouts, shipping-label costs, refunds/credits comprehensively, or calculate actual profit.
+
 ## eBay account deletion notifications
 
 The isolated FastAPI service in `ebay/compliance.py` supports eBay Marketplace Account
