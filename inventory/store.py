@@ -1128,6 +1128,34 @@ class InventoryStore:
             ).fetchall()
         return [self._sale_cost_record(row) for row in rows]
 
+    def list_all_sale_costs(self) -> list[SaleCostRecord]:
+        """Return all recorded sale components in stable order for bulk reporting."""
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT sale_costs.*, sales.sale_id,
+                           related.cost_id AS related_cost_id
+                FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
+                LEFT JOIN sale_costs AS related
+                  ON related.internal_id = sale_costs.related_cost_internal_id
+                ORDER BY sale_costs.internal_id"""
+            ).fetchall()
+        return [self._sale_cost_record(row) for row in rows]
+
+    def list_reconciliation_confirmations(self) -> dict[int, frozenset[str]]:
+        """Return confirmed categories keyed by internal sale ID for bulk reporting."""
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT sale_internal_id, category
+                FROM sale_reconciliation_confirmations
+                ORDER BY sale_internal_id, category"""
+            ).fetchall()
+        confirmations: dict[int, set[str]] = {}
+        for row in rows:
+            confirmations.setdefault(row["sale_internal_id"], set()).add(row["category"])
+        return {sale_id: frozenset(categories) for sale_id, categories in confirmations.items()}
+
     def remove_sale_cost(self, cost_id: str) -> SaleCostRecord:
         """Remove an erroneous component without reusing its stable identifier."""
         self.initialize()
