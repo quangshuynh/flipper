@@ -129,6 +129,31 @@ revocation is also desired.
 Order totals are buyer-facing order amounts, not net seller proceeds. Flipper does not yet retrieve
 fees, payouts, shipping-label costs, refunds/credits comprehensively, or calculate actual profit.
 
+## Local inventory
+
+Inventory is persisted independently of eBay in the ignored local SQLite database
+`data/flipper_inventory.db`. Each acquisition receives a durable human-facing ID (`Q0001`, `Q0002`,
+and so on) distinct from its internal database key. IDs are transactionally allocated and are not
+reused after deletion. Acquisition cost is required in USD and stored exactly as integer cents;
+quantity must be positive.
+
+```bash
+python main.py inventory add --title "Example item" --source "estate sale" --acquired-at 2026-09-01 --cost 25.00
+python main.py inventory list
+python main.py inventory show Q0001
+```
+
+An item can optionally retain marketplace linkage:
+
+```bash
+python main.py inventory add --title "Example item" --source "local sale" --acquired-at 2026-09-01 --cost 25.00 --status listed --marketplace eBay --marketplace-item-id 123456789012 --marketplace-sku Q0001
+```
+
+Marketplace item IDs and SKUs are references for future reconciliation. SKU linkage does not mean
+an item sold, and inventory is not yet automatically reconciled with eBay orders. Flipper keeps the
+local inventory record authoritative, does not persist order responses, and does not store buyer
+names, contact details, or addresses.
+
 ## eBay account deletion notifications
 
 The isolated FastAPI service in `ebay/compliance.py` supports eBay Marketplace Account

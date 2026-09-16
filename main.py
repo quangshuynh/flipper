@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sqlite3
 import sys
 import webbrowser
 from collections.abc import Callable
@@ -14,6 +15,12 @@ from collectors.json_feed_collector import fetch_listings
 from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
 from ebay.orders import EbayOrder, Money
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
+from inventory.store import (
+    VALID_STATUSES,
+    InventoryNotFoundError,
+    InventoryStore,
+    InventoryValidationError,
+)
 from models import DealEvaluation
 from parser.ai_enricher import enrich_specs_with_ai
 from notifier.discord_notifier import send_deal_to_discord
@@ -24,6 +31,7 @@ from utils.distance import compute_distance_miles
 
 
 EBAY_NOW_SAFETY_MARGIN = timedelta(minutes=5)
+INVENTORY_DB_PATH = "data/flipper_inventory.db"
 
 
 def run() -> None:
@@ -220,7 +228,73 @@ def build_parser() -> argparse.ArgumentParser:
     orders = ebay_commands.add_parser("orders", help="show recent seller orders")
     orders.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
     orders.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
+    inventory = commands.add_parser("inventory", help="manage local inventory")
+    inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    inventory_commands = inventory.add_subparsers(dest="inventory_command", required=True)
+    add = inventory_commands.add_parser("add", help="record an acquired item")
+    add.add_argument("--title", required=True)
+    add.add_argument("--source", required=True, help="acquisition source")
+    add.add_argument("--acquired-at", required=True, help="acquisition date (YYYY-MM-DD)")
+    add.add_argument("--cost", required=True, help="acquisition cost in USD")
+    add.add_argument("--quantity", type=int, default=1)
+    add.add_argument("--notes", default="")
+    add.add_argument("--status", choices=VALID_STATUSES, default="acquired")
+    add.add_argument("--marketplace")
+    add.add_argument("--marketplace-item-id")
+    add.add_argument("--marketplace-sku")
+    inventory_commands.add_parser("list", help="list inventory")
+    show = inventory_commands.add_parser("show", help="show one inventory record")
+    show.add_argument("inventory_id")
     return parser
+
+
+def run_inventory_command(args: argparse.Namespace) -> int:
+    store = InventoryStore(args.database)
+    try:
+        if args.inventory_command == "add":
+            record = store.add(
+                title=args.title,
+                source=args.source,
+                acquired_at=args.acquired_at,
+                acquisition_cost=args.cost,
+                quantity=args.quantity,
+                notes=args.notes,
+                status=args.status,
+                marketplace=args.marketplace,
+                marketplace_item_id=args.marketplace_item_id,
+                marketplace_sku=args.marketplace_sku,
+            )
+            print(f"Created inventory item {record.inventory_id}")
+            return 0
+        if args.inventory_command == "list":
+            records = store.list()
+            if not records:
+                print("No inventory items found.")
+                return 0
+            for record in records:
+                print(
+                    f"{record.inventory_id} | {record.status} | qty {record.quantity} | "
+                    f"${record.acquisition_cost:.2f} | {record.title}"
+                )
+            return 0
+
+        record = store.get(args.inventory_id)
+        print(f"{record.inventory_id}: {record.title}")
+        print("Acquisition")
+        print(f"  Source: {record.source}")
+        print(f"  Date: {record.acquired_at}")
+        print(f"  Cost (USD): ${record.acquisition_cost:.2f}")
+        print(f"  Quantity: {record.quantity}")
+        print(f"  Status: {record.status}")
+        print(f"  Notes: {record.notes or 'none'}")
+        print("Marketplace linkage")
+        print(f"  Marketplace: {record.marketplace or 'none'}")
+        print(f"  Listing/item ID: {record.marketplace_item_id or 'none'}")
+        print(f"  SKU/custom label: {record.marketplace_sku or 'none'}")
+        return 0
+    except (InventoryValidationError, InventoryNotFoundError, RuntimeError, sqlite3.Error) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def run_ebay_command(args: argparse.Namespace) -> int:
@@ -262,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "ebay":
         return run_ebay_command(args)
+    if args.command == "inventory":
+        return run_inventory_command(args)
     run()
     return 0
 

@@ -1,4 +1,5 @@
 .env
+context.md
 __pycache__/
 *.py[cod]
 .pytest_cache/
