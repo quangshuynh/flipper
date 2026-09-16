@@ -71,6 +71,59 @@ Discord is disabled when `DISCORD_WEBHOOK_URL` is empty. eBay price refresh is a
 python -m pricing.market_updater
 ```
 
+## eBay account deletion notifications
+
+The isolated FastAPI service in `ebay/compliance.py` supports eBay Marketplace Account
+Deletion/Closure endpoint verification and notification acknowledgement. It does not change or
+depend on the CLI analysis pipeline.
+
+Set these values in an uncommitted `.env` or, in production, in your hosting provider's secret
+configuration:
+
+```dotenv
+EBAY_ACCOUNT_DELETION_TOKEN=
+EBAY_ACCOUNT_DELETION_ENDPOINT=https://your-domain.example/api/ebay/account-deletion
+```
+
+The token must contain 32-80 letters, numbers, underscores, or hyphens. Generate one without
+printing or committing it, for example by writing a Python-generated token directly into your
+local `.env` (run this once):
+
+```bash
+python -c "import secrets; open('.env', 'a', encoding='utf-8').write('EBAY_ACCOUNT_DELETION_TOKEN=' + secrets.token_urlsafe(48) + '\n')"
+```
+
+Ensure `.env` contains only one value for that variable. The endpoint value must exactly match
+the URL entered in eBay, including capitalization and any trailing slash; the configured route
+above has no trailing slash.
+
+For local development, load `.env` into the process environment and run:
+
+```bash
+uvicorn ebay.compliance:app --env-file .env --reload --host 127.0.0.1 --port 8000
+```
+
+The production start command is:
+
+```bash
+uvicorn ebay.compliance:app --host 0.0.0.0 --port 8000
+```
+
+Use the port mechanism required by your hosting provider when it supplies one. The production
+callback must be deployed at a stable, publicly reachable HTTPS URL. eBay does not accept
+`localhost` or an internal IP address, so the local server is only for development.
+
+In the eBay Developer Portal, open the Production keyset's **Alerts & Notifications** page,
+select **Marketplace Account Deletion**, save an alert email, and enter the exact deployed URL
+and the same verification token. Saving triggers a GET challenge. After verification succeeds,
+use **Send Test Notification** and confirm the deployed service returns a success response.
+
+The current POST handler parses and acknowledges notifications but performs no data deletion
+because Flipper does not persist eBay seller, buyer, or order data. It also does not verify the
+`X-EBAY-SIGNATURE` notification signature. Before adding seller/order persistence, implement
+irreversible deletion of all applicable user data and eBay's documented signature verification
+at the explicit processing boundary in `ebay/compliance.py`.
+
 ## Tests and CI
 
 Run the deterministic offline suite with:
