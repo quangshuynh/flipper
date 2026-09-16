@@ -6,7 +6,7 @@ import sqlite3
 import sys
 import webbrowser
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from getpass import getpass
 
@@ -42,6 +42,7 @@ from parser.ai_enricher import enrich_specs_with_ai
 from notifier.discord_notifier import send_deal_to_discord
 from parser.extractor import extract_specs
 from pricing.estimator import calculate_pricing_result, estimate_market_value, score_deal
+from reports.service import build_summary_report, inventory_report, sales_report
 from sales.economics import EconomicComponent, calculate_sale_economics
 from utils.dedupe import init_db, has_seen, mark_seen
 from utils.distance import compute_distance_miles
@@ -469,6 +470,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     unconfirm.add_argument("sale_id")
     unconfirm.add_argument("--category", choices=RECONCILIATION_CATEGORIES, required=True)
+    reports = commands.add_parser("reports", help="show local reseller business reports")
+    reports.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    report_commands = reports.add_subparsers(dest="report_command", required=True)
+    for name, help_text in (
+        ("summary", "show inventory and realized-economics summary"),
+        ("inventory", "show current inventory detail"),
+        ("sales", "show sale-level realized economics"),
+    ):
+        report = report_commands.add_parser(name, help=help_text)
+        report.add_argument(
+            "--from", dest="start", type=_parse_date, help="inclusive date (YYYY-MM-DD)"
+        )
+        report.add_argument(
+            "--to", dest="end", type=_parse_date, help="inclusive date (YYYY-MM-DD)"
+        )
     return parser
 
 
@@ -730,6 +746,175 @@ def run_sales_command(args: argparse.Namespace) -> int:
         return 1
 
 
+def _report_date_range(args: argparse.Namespace) -> tuple[date | None, date | None]:
+    start = args.start.date() if args.start else None
+    end = args.end.date() if args.end else None
+    if start is not None and end is not None and start > end:
+        raise ValueError("report start date must be on or before end date")
+    return start, end
+
+
+def _report_money(currency: str, amount: Decimal) -> str:
+    exact = format(amount, "f")
+    if "." not in exact:
+        exact += ".00"
+    else:
+        whole, fractional = exact.split(".", 1)
+        exact = f"{whole}.{fractional.ljust(2, '0')}"
+    return f"{currency} {exact}"
+
+
+def _report_decimal(value: Decimal | None, *, suffix: str = "") -> str:
+    return "unavailable" if value is None else f"{value:.2f}{suffix}"
+
+
+def _print_inventory_report(report) -> None:
+    print("Inventory Report")
+    if not report.rows:
+        print("No inventory items found in the selected acquisition-date range.")
+    for row in report.rows:
+        record = row.record
+        print(
+            f"{record.inventory_id} | {record.status} | USD {record.acquisition_cost:.2f} | "
+            f"marketplace: {record.marketplace or 'none'} | SKU: {record.marketplace_sku or 'none'}"
+        )
+        print(
+            f"  acquired: {record.acquired_at} | listed: {record.listed_at or 'none'} | "
+            f"sold: {record.sold_at or 'none'} | days held: "
+            f"{row.days_held if row.days_held is not None else 'unavailable'} | "
+            f"sale: {row.linked_sale_id or 'none'}"
+        )
+
+
+def _print_sales_report(report) -> None:
+    print("Sales Report")
+    if not report.rows:
+        print("No sales found in the selected sold-date range.")
+    for row in report.rows:
+        sale = row.sale
+        profit = (
+            _report_money(sale.currency, row.economics.recorded_profit)
+            if row.economics
+            else "unavailable"
+        )
+        margin = (
+            _report_decimal(row.margin * 100, suffix="%")
+            if row.margin is not None
+            else "unavailable"
+        )
+        print(
+            f"{sale.sale_id} | {sale.inventory_id} | {sale.sold_at} | "
+            f"gross: {_report_money(sale.currency, sale.gross_amount)} | "
+            f"acquisition: USD {row.acquisition_cost_usd:.2f}"
+        )
+        print(
+            f"  reducing: {_report_money(sale.currency, row.reducing_costs)} | "
+            f"credits: {_report_money(sale.currency, row.increasing_credits)} | "
+            f"recorded profit: {profit} | margin: {margin} | "
+            f"reconciliation: {row.reconciliation_state}"
+        )
+        if row.missing_categories:
+            print(f"  needs attention: {', '.join(row.missing_categories)}")
+
+
+def _print_summary_report(report, *, start, end) -> None:
+    inventory = report.inventory
+    sales = report.sales
+    print("Reseller Business Summary")
+    print("Inventory snapshot (current state; not affected by sale date filters)")
+    print(
+        f"  Active: {inventory.active_count} "
+        f"(acquired {inventory.status_counts.get('acquired', 0)}, "
+        f"listed {inventory.status_counts.get('listed', 0)})"
+    )
+    print(
+        f"  Sold: {inventory.status_counts.get('sold', 0)} | "
+        f"archived: {inventory.status_counts.get('archived', 0)}"
+    )
+    print(f"  Acquisition capital tied up: USD {inventory.active_capital_usd:.2f}")
+    average_cost = inventory.average_active_acquisition_cost_usd
+    print(f"  Average active acquisition cost: {_report_decimal(average_cost)}")
+    listed_age = _report_decimal(inventory.average_listed_age_days, suffix=" days")
+    print(f"  Average listed age: {listed_age}")
+    oldest = inventory.oldest_active
+    oldest_text = (
+        f"{oldest.record.inventory_id} ({oldest.days_held} days)"
+        if oldest is not None and oldest.days_held is not None
+        else "unavailable"
+    )
+    print(f"  Oldest active item: {oldest_text}")
+    range_text = f"{start or 'beginning'} through {end or 'present'}"
+    print(f"Sales (sold_at: {range_text})")
+    print(f"  Sales count: {len(sales.rows)}")
+    for currency, amount in sorted(sales.gross_by_currency.items()):
+        print(f"  Gross sales ({currency}): {_report_money(currency, amount)}")
+    print(f"  Acquisition cost / COGS (USD): USD {sales.acquisition_cost_usd:.2f}")
+    for currency in sorted(set(sales.reducing_by_currency) | set(sales.increasing_by_currency)):
+        print(
+            f"  Recorded reducing costs ({currency}): "
+            f"{_report_money(currency, sales.reducing_by_currency.get(currency, Decimal(0)))}"
+        )
+        print(
+            f"  Recorded increasing credits ({currency}): "
+            f"{_report_money(currency, sales.increasing_by_currency.get(currency, Decimal(0)))}"
+        )
+    for currency, amount in sorted(sales.recorded_profit_by_currency.items()):
+        print(f"  Recorded realized profit ({currency}): {_report_money(currency, amount)}")
+        reconciled_profit = sales.fully_reconciled_profit_by_currency.get(currency, Decimal(0))
+        incomplete_profit = sales.incomplete_recorded_profit_by_currency.get(currency, Decimal(0))
+        print(
+            f"  Fully reconciled realized profit ({currency}): "
+            f"{_report_money(currency, reconciled_profit)}"
+        )
+        print(
+            f"  Incomplete recorded profit ({currency}): "
+            f"{_report_money(currency, incomplete_profit)}"
+        )
+        margin = sales.aggregate_margin_by_currency[currency]
+        print(
+            f"  Aggregate recorded margin ({currency}): "
+            f"{_report_decimal(margin * 100, suffix='%') if margin is not None else 'unavailable'}"
+        )
+    counts = sales.reconciliation_counts
+    print(
+        "  Reconciliation: "
+        f"{counts.get('incomplete', 0)} incomplete | "
+        f"{counts.get('partially_reconciled', 0)} partially reconciled | "
+        f"{counts.get('fully_reconciled', 0)} fully reconciled"
+    )
+    print(f"  Average days held: {_report_decimal(sales.average_days_held)}")
+    print(f"  Median days held: {_report_decimal(sales.median_days_held)}")
+
+
+def run_reports_command(args: argparse.Namespace) -> int:
+    try:
+        start, end = _report_date_range(args)
+        store = InventoryStore(args.database)
+        today = _utc_now().date()
+        if args.report_command == "summary":
+            report = build_summary_report(store, today=today, start=start, end=end)
+            _print_summary_report(report, start=start, end=end)
+        elif args.report_command == "inventory":
+            report = inventory_report(
+                store.list(), store.list_sales(), today=today, start=start, end=end
+            )
+            _print_inventory_report(report)
+        else:
+            report = sales_report(
+                store.list(),
+                store.list_sales(),
+                store.list_all_sale_costs(),
+                store.list_reconciliation_confirmations(),
+                start=start,
+                end=end,
+            )
+            _print_sales_report(report)
+        return 0
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = build_parser().parse_args(argv)
@@ -739,6 +924,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_inventory_command(args)
     if args.command == "sales":
         return run_sales_command(args)
+    if args.command == "reports":
+        return run_reports_command(args)
     run()
     return 0
 

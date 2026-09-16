@@ -306,6 +306,52 @@ Acquisition cost is currently USD; Flipper will not calculate profit for another
 performs conversion. This completeness model covers sale economics only. Payout-to-bank settlement
 and reconciliation remain deliberately deferred.
 
+## Local reports
+
+Reports are calculated on demand from durable inventory, sale, cost-component, and reconciliation
+records. No aggregate values are persisted or cached.
+
+```bash
+python main.py reports summary
+python main.py reports summary --from 2026-09-01 --to 2026-09-30
+python main.py reports inventory
+python main.py reports inventory --from 2026-09-01 --to 2026-09-30
+python main.py reports sales
+python main.py reports sales --from 2026-09-01 --to 2026-09-30
+```
+
+The summary's inventory section is always a current snapshot. `acquired` and `listed` are active;
+their acquisition costs are capital still tied up. `sold` and `archived` are excluded. Archived
+unsold inventory is not active capital, and its held age is unavailable because Flipper has no
+archive timestamp. The inventory report's optional inclusive dates filter explicit `acquired_at`.
+The summary and sales report dates instead filter sale `sold_at`, inclusively in UTC. Sale filters
+never alter the current inventory snapshot.
+
+Gross sales, reducing costs, and increasing credits are grouped by their recorded currency. They
+are never combined across currencies. Acquisition cost and COGS remain USD. Recorded realized
+profit reuses the sale economics calculation: gross minus USD acquisition cost and reducing
+components, plus increasing components. Because conversion is not supported, profit and margin are
+unavailable for non-USD sales.
+
+Recorded realized profit includes every calculable sale in the selected range, even when economics
+are incomplete. Fully reconciled realized profit includes only sales with all four economics
+categories explicitly confirmed. Incomplete recorded profit is shown separately and is never
+described as final or verified. Reports count `incomplete`, `partially_reconciled`, and
+`fully_reconciled` sales; sale detail lists the confirmation categories still needing attention.
+
+Aggregate recorded margin is total recorded realized profit divided by total positive gross sales
+for a currency, not an average of item percentages. It is unavailable when aggregate gross is zero.
+Per-sale margin uses the same profit/gross definition and requires positive gross.
+
+Days held uses the explicit acquisition date through `sold_at` for sold inventory and through the
+current UTC date for active inventory. Negative/inconsistent intervals are unavailable. Listed age
+requires `listed_at`; older migrated records with a missing timestamp remain unavailable rather than
+using record creation time. Average and median sold days held use only defensible intervals.
+
+Historical sell-through is intentionally deferred. The current schema stores the current lifecycle
+state but not complete period-opening inventory or status-transition history, so it cannot provide
+a defensible historical denominator without inventing data.
+
 ## eBay account deletion notifications
 
 The isolated FastAPI service in `ebay/compliance.py` supports eBay Marketplace Account
