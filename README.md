@@ -186,6 +186,34 @@ from titles, prices, or buyer data. The command does not persist orders, change 
 set lifecycle timestamps, or mark anything sold. Flipper keeps local inventory authoritative and
 does not store buyer names, contact details, or addresses.
 
+After reviewing reconciliation, explicitly import eligible order lines as durable local sales:
+
+```bash
+python main.py ebay import-sales
+python main.py ebay import-sales --from 2026-09-01 --to 2026-09-30
+python main.py sales list
+python main.py sales show S000001
+```
+
+Import is manual and never runs during `ebay reconcile` or in the background. Only a line with an
+exactly one-record reconciliation, a gross line-item amount, order-line quantity 1, and matched local
+inventory quantity 1 in `listed` status can be imported. Flipper does not infer partial-inventory
+semantics. The sale insert and `listed → sold` lifecycle transition are one SQLite transaction, and
+the eBay order creation time becomes `sold_at`.
+
+The durable external identity is eBay marketplace + order ID + line-item ID. A database uniqueness
+constraint prevents duplicate imports. Repeating identical data is a no-op reported as already
+imported; changed immutable economics for that identity are reported as a conflict and never
+overwrite history. Gross line-item money is stored exactly as a scaled integer with its scale and
+three-letter currency; no binary floating point, USD assumption, or exchange-rate conversion is
+used.
+
+Persisted sales contain only the linked local inventory key/Q-number, marketplace, eBay order and
+line identifiers, SKU, quantity, gross amount and currency, sale time, and import time. Buyer names,
+usernames, email, phone, recipient, and address data are not retained. Gross sale value is not
+realized profit: eBay fees, payouts, shipping costs, refunds, fee credits, and other expenses are not
+represented yet.
+
 ## eBay account deletion notifications
 
 The isolated FastAPI service in `ebay/compliance.py` supports eBay Marketplace Account

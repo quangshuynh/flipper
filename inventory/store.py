@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 STATUS_TRANSITIONS = {
     "acquired": frozenset({"listed", "archived"}),
@@ -25,6 +25,18 @@ class InventoryValidationError(ValueError):
 
 class InventoryNotFoundError(LookupError):
     """No inventory record has the requested human-facing ID."""
+
+
+class SaleNotFoundError(LookupError):
+    """No sale record has the requested human-facing ID."""
+
+
+class SaleImportError(ValueError):
+    """A sale cannot be imported without violating local invariants."""
+
+
+class SaleConflictError(SaleImportError):
+    """An external sale identity conflicts with its persisted economics."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +61,30 @@ class InventoryRecord:
     @property
     def acquisition_cost(self) -> Decimal:
         return Decimal(self.acquisition_cost_cents) / 100
+
+
+@dataclass(frozen=True)
+class SaleRecord:
+    """A minimized marketplace sale with an exact scaled-integer gross amount."""
+
+    internal_id: int
+    sale_id: str
+    inventory_internal_id: int
+    inventory_id: str
+    marketplace: str
+    external_order_id: str
+    external_line_item_id: str
+    marketplace_sku: str
+    quantity: int
+    gross_amount_minor: int
+    gross_amount_scale: int
+    currency: str
+    sold_at: str
+    imported_at: str
+
+    @property
+    def gross_amount(self) -> Decimal:
+        return Decimal(self.gross_amount_minor).scaleb(-self.gross_amount_scale)
 
 
 def parse_usd_cents(value: str | Decimal) -> int:
@@ -169,6 +205,50 @@ class InventoryStore:
                     WHERE marketplace IS NOT NULL AND marketplace_sku IS NOT NULL"""
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (3)")
+            if 4 not in versions:
+                connection.execute(
+                    """CREATE TABLE sale_id_sequence (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        last_value INTEGER NOT NULL CHECK (last_value >= 0)
+                    )"""
+                )
+                connection.execute(
+                    "INSERT INTO sale_id_sequence (singleton, last_value) VALUES (1, 0)"
+                )
+                connection.execute(
+                    """CREATE TABLE sales (
+                        internal_id INTEGER PRIMARY KEY,
+                        sale_id TEXT NOT NULL UNIQUE,
+                        inventory_internal_id INTEGER NOT NULL,
+                        marketplace TEXT NOT NULL COLLATE NOCASE
+                            CHECK (length(trim(marketplace)) > 0),
+                        external_order_id TEXT NOT NULL
+                            CHECK (length(trim(external_order_id)) > 0),
+                        external_line_item_id TEXT NOT NULL
+                            CHECK (length(trim(external_line_item_id)) > 0),
+                        marketplace_sku TEXT NOT NULL
+                            CHECK (length(marketplace_sku) > 0),
+                        quantity INTEGER NOT NULL CHECK (quantity > 0),
+                        gross_amount_minor INTEGER NOT NULL CHECK (gross_amount_minor >= 0),
+                        gross_amount_scale INTEGER NOT NULL
+                            CHECK (gross_amount_scale BETWEEN 0 AND 9),
+                        currency TEXT NOT NULL
+                            CHECK (length(currency) = 3 AND currency = upper(currency)),
+                        sold_at TEXT NOT NULL
+                            CHECK (length(sold_at) = 20 AND substr(sold_at, 11, 1) = 'T'
+                                   AND substr(sold_at, -1) = 'Z'),
+                        imported_at TEXT NOT NULL
+                            CHECK (length(imported_at) = 20 AND substr(imported_at, 11, 1) = 'T'
+                                   AND substr(imported_at, -1) = 'Z'),
+                        FOREIGN KEY (inventory_internal_id)
+                            REFERENCES inventory_items(internal_id),
+                        UNIQUE (marketplace, external_order_id, external_line_item_id)
+                    )"""
+                )
+                connection.execute(
+                    "CREATE INDEX sales_inventory_internal_id ON sales (inventory_internal_id)"
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (4)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -376,31 +456,7 @@ class InventoryStore:
             ).fetchone()
             if row is None:
                 raise InventoryNotFoundError(f"inventory item {inventory_id} was not found")
-            current = row["status"]
-            if status not in STATUS_TRANSITIONS[current]:
-                allowed = ", ".join(sorted(STATUS_TRANSITIONS[current]))
-                raise InventoryValidationError(
-                    f"cannot transition inventory item from {current} to {status}; "
-                    f"allowed: {allowed}"
-                )
-
-            listed_at = row["listed_at"]
-            sold_at = row["sold_at"]
-            if current == "acquired" and status == "listed":
-                listed_at = self._utc_now()
-            elif current == "listed" and status == "sold":
-                sold_at = self._utc_now()
-            elif status == "acquired":
-                listed_at = None
-                sold_at = None
-            elif current == "sold" and status == "listed":
-                sold_at = None
-
-            connection.execute(
-                "UPDATE inventory_items SET status = ?, listed_at = ?, sold_at = ? "
-                "WHERE internal_id = ?",
-                (status, listed_at, sold_at, row["internal_id"]),
-            )
+            self._transition_row(connection, row, status)
             connection.commit()
         except Exception:
             connection.rollback()
@@ -408,6 +464,215 @@ class InventoryStore:
         finally:
             connection.close()
         return self.get(inventory_id)
+
+    def _transition_row(
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        status: str,
+        *,
+        event_timestamp: str | None = None,
+    ) -> None:
+        """Apply shared lifecycle semantics inside the caller's transaction."""
+        current = row["status"]
+        if status not in STATUS_TRANSITIONS[current]:
+            allowed = ", ".join(sorted(STATUS_TRANSITIONS[current]))
+            raise InventoryValidationError(
+                f"cannot transition inventory item from {current} to {status}; allowed: {allowed}"
+            )
+
+        listed_at = row["listed_at"]
+        sold_at = row["sold_at"]
+        if current == "acquired" and status == "listed":
+            listed_at = event_timestamp or self._utc_now()
+        elif current == "listed" and status == "sold":
+            sold_at = event_timestamp or self._utc_now()
+        elif status == "acquired":
+            listed_at = None
+            sold_at = None
+        elif current == "sold" and status == "listed":
+            sold_at = None
+
+        connection.execute(
+            "UPDATE inventory_items SET status = ?, listed_at = ?, sold_at = ? "
+            "WHERE internal_id = ?",
+            (status, listed_at, sold_at, row["internal_id"]),
+        )
+
+    @staticmethod
+    def _timestamp(value: datetime, name: str) -> str:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise SaleImportError(f"{name} must be timezone-aware")
+        return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    @staticmethod
+    def _scaled_amount(value: Decimal) -> tuple[int, int]:
+        if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+            raise SaleImportError("gross item amount must be a finite nonnegative decimal")
+        normalized = value.normalize()
+        scale = max(0, -normalized.as_tuple().exponent)
+        if scale > 9:
+            raise SaleImportError("gross item amount has unsupported precision")
+        return int(normalized.scaleb(scale)), scale
+
+    def import_sale(
+        self,
+        *,
+        inventory_id: str,
+        marketplace: str,
+        external_order_id: str,
+        external_line_item_id: str,
+        marketplace_sku: str,
+        quantity: int,
+        gross_amount: Decimal,
+        currency: str,
+        sold_at: datetime,
+    ) -> tuple[SaleRecord, bool]:
+        """Atomically insert one sale and apply the listed-to-sold lifecycle transition."""
+        marketplace = self._required(marketplace, "marketplace")
+        external_order_id = self._required(external_order_id, "external order ID")
+        external_line_item_id = self._required(external_line_item_id, "external line item ID")
+        marketplace_sku = self._required(marketplace_sku, "marketplace SKU")
+        currency = self._required(currency, "currency").upper()
+        if len(currency) != 3 or not currency.isalpha():
+            raise SaleImportError("currency must be a three-letter code")
+        if quantity != 1:
+            raise SaleImportError("sale import currently supports only quantity 1")
+        amount_minor, amount_scale = self._scaled_amount(gross_amount)
+        sold_timestamp = self._timestamp(sold_at, "sale timestamp")
+        imported_timestamp = self._utc_now()
+        identity = (marketplace, external_order_id, external_line_item_id)
+
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            item = connection.execute(
+                "SELECT * FROM inventory_items WHERE inventory_id = ?", (inventory_id.upper(),)
+            ).fetchone()
+            if item is None:
+                raise InventoryNotFoundError(f"inventory item {inventory_id} was not found")
+            existing = connection.execute(
+                """SELECT sales.*, inventory_items.inventory_id
+                FROM sales JOIN inventory_items
+                  ON inventory_items.internal_id = sales.inventory_internal_id
+                WHERE sales.marketplace = ? AND external_order_id = ?
+                  AND external_line_item_id = ?""",
+                identity,
+            ).fetchone()
+            immutable = (
+                item["internal_id"],
+                marketplace_sku,
+                quantity,
+                amount_minor,
+                amount_scale,
+                currency,
+                sold_timestamp,
+            )
+            if existing is not None:
+                persisted = (
+                    existing["inventory_internal_id"],
+                    existing["marketplace_sku"],
+                    existing["quantity"],
+                    existing["gross_amount_minor"],
+                    existing["gross_amount_scale"],
+                    existing["currency"],
+                    existing["sold_at"],
+                )
+                if persisted != immutable:
+                    raise SaleConflictError(
+                        "external sale identity conflicts with the persisted sale record"
+                    )
+                connection.commit()
+                return self._sale_record(existing), False
+
+            if item["quantity"] != 1:
+                raise SaleImportError("sale import requires local inventory quantity 1")
+            next_value = connection.execute(
+                "SELECT last_value + 1 FROM sale_id_sequence WHERE singleton = 1"
+            ).fetchone()[0]
+            sale_id = f"S{next_value:06d}"
+            cursor = connection.execute(
+                """INSERT INTO sales (
+                    sale_id, inventory_internal_id, marketplace, external_order_id,
+                    external_line_item_id, marketplace_sku, quantity, gross_amount_minor,
+                    gross_amount_scale, currency, sold_at, imported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    sale_id,
+                    item["internal_id"],
+                    marketplace,
+                    external_order_id,
+                    external_line_item_id,
+                    marketplace_sku,
+                    quantity,
+                    amount_minor,
+                    amount_scale,
+                    currency,
+                    sold_timestamp,
+                    imported_timestamp,
+                ),
+            )
+            try:
+                self._transition_row(connection, item, "sold", event_timestamp=sold_timestamp)
+            except InventoryValidationError as exc:
+                raise SaleImportError(str(exc)) from exc
+            connection.execute(
+                "UPDATE sale_id_sequence SET last_value = ? WHERE singleton = 1", (next_value,)
+            )
+            connection.commit()
+            internal_id = cursor.lastrowid
+            assert internal_id is not None
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_sale(sale_id), True
+
+    def get_sale(self, sale_id: str) -> SaleRecord:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT sales.*, inventory_items.inventory_id
+                FROM sales JOIN inventory_items
+                  ON inventory_items.internal_id = sales.inventory_internal_id
+                WHERE sale_id = ?""",
+                (sale_id.upper(),),
+            ).fetchone()
+        if row is None:
+            raise SaleNotFoundError(f"sale {sale_id} was not found")
+        return self._sale_record(row)
+
+    def list_sales(self) -> list[SaleRecord]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT sales.*, inventory_items.inventory_id
+                FROM sales JOIN inventory_items
+                  ON inventory_items.internal_id = sales.inventory_internal_id
+                ORDER BY sales.internal_id"""
+            ).fetchall()
+        return [self._sale_record(row) for row in rows]
+
+    @staticmethod
+    def _sale_record(row: sqlite3.Row) -> SaleRecord:
+        return SaleRecord(
+            internal_id=row["internal_id"],
+            sale_id=row["sale_id"],
+            inventory_internal_id=row["inventory_internal_id"],
+            inventory_id=row["inventory_id"],
+            marketplace=row["marketplace"],
+            external_order_id=row["external_order_id"],
+            external_line_item_id=row["external_line_item_id"],
+            marketplace_sku=row["marketplace_sku"],
+            quantity=row["quantity"],
+            gross_amount_minor=row["gross_amount_minor"],
+            gross_amount_scale=row["gross_amount_scale"],
+            currency=row["currency"],
+            sold_at=row["sold_at"],
+            imported_at=row["imported_at"],
+        )
 
     def get(self, inventory_id: str) -> InventoryRecord:
         self.initialize()

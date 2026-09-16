@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 
 from ebay.orders import EbayOrder, EbayOrderLineItem
@@ -19,6 +20,7 @@ class ReconciliationStatus(str, Enum):
 @dataclass(frozen=True)
 class ReconciliationResult:
     order_id: str
+    order_creation_date: datetime
     line_item: EbayOrderLineItem
     status: ReconciliationStatus
     inventory_matches: tuple[InventoryRecord, ...] = ()
@@ -62,7 +64,11 @@ def reconcile_ebay_orders(
                     status = ReconciliationStatus.AMBIGUOUS
                 else:
                     status = ReconciliationStatus.UNMATCHED
-            results.append(ReconciliationResult(order.order_id, line_item, status, matches))
+            results.append(
+                ReconciliationResult(
+                    order.order_id, order.creation_date, line_item, status, matches
+                )
+            )
     return results
 
 

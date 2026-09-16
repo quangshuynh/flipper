@@ -157,3 +157,76 @@ def test_reconcile_output_summary_and_date_range_reuse(monkeypatch, tmp_path, ca
         datetime(2026, 9, 15, 23, 59, 59, 999000, tzinfo=timezone.utc),
     )
     assert "buyer" not in output.lower()
+
+
+def test_import_sales_summary_and_local_sales_inspection(monkeypatch, tmp_path, capsys):
+    database = tmp_path / "inventory.db"
+    store = main.InventoryStore(database)
+    store.add(
+        title="Sony Camera",
+        source="sale",
+        acquired_at="2026-09-01",
+        acquisition_cost="20",
+        marketplace="eBay",
+        marketplace_sku="CAM-1",
+    )
+    store.transition_status("Q0001", "listed")
+    matched = EbayOrder(
+        **{
+            **order().__dict__,
+            "line_items": (
+                EbayOrderLineItem(
+                    "line-1", "2", "Sony Camera", "CAM-1", 1, Money(Decimal("42.99"), "USD")
+                ),
+            ),
+        }
+    )
+    monkeypatch.setattr(main, "_seller_oauth", lambda: OAuth())
+    monkeypatch.setattr(main.FulfillmentClient, "get_orders", lambda self, start, end: [matched])
+
+    assert main.main(["ebay", "import-sales", "--database", str(database)]) == 0
+    output = capsys.readouterr().out
+    assert "1 imported" in output and "Q0001" in output
+    assert "buyer" not in output.lower()
+
+    assert main.main(["sales", "--database", str(database), "list"]) == 0
+    listed = capsys.readouterr().out
+    assert "S000001 | Q0001 | eBay | USD 42.99" in listed
+
+    assert main.main(["sales", "--database", str(database), "show", "S000001"]) == 0
+    shown = capsys.readouterr().out
+    assert "Inventory: Q0001" in shown
+    assert "Order: 12-34567-89012" in shown
+    assert "Gross: USD 42.99" in shown
+    assert "buyer" not in shown.lower()
+
+
+def test_import_sales_repeat_reports_already_imported(monkeypatch, tmp_path, capsys):
+    database = tmp_path / "inventory.db"
+    store = main.InventoryStore(database)
+    store.add(
+        title="Sony Camera",
+        source="sale",
+        acquired_at="2026-09-01",
+        acquisition_cost="20",
+        marketplace="eBay",
+        marketplace_sku="CAM-1",
+    )
+    store.transition_status("Q0001", "listed")
+    matched = EbayOrder(
+        **{
+            **order().__dict__,
+            "line_items": (
+                EbayOrderLineItem(
+                    "line-1", "2", "Sony Camera", "CAM-1", 1, Money(Decimal("42.99"), "USD")
+                ),
+            ),
+        }
+    )
+    monkeypatch.setattr(main, "_seller_oauth", lambda: OAuth())
+    monkeypatch.setattr(main.FulfillmentClient, "get_orders", lambda self, start, end: [matched])
+    args = ["ebay", "import-sales", "--database", str(database)]
+    assert main.main(args) == 0
+    capsys.readouterr()
+    assert main.main(args) == 0
+    assert "1 already imported" in capsys.readouterr().out
