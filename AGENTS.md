@@ -28,3 +28,9 @@ or an eBay listing-management tool.
   request targeting `main`. Do not merge the PR unless the user explicitly requests it. Never
   rewrite shared history or force-push unless the user explicitly authorizes it for a specific
   reason. Do not create a release or tag unless explicitly requested.
+- Feature branches MUST use the `feat/<short-description>` naming convention.
+- Fixes should use `fix/<short-description>`.
+- Refactors should use `refactor/<short-description>`.
+- Documentation-only work should use `docs/<short-description>`.
+- Do not use `feature/` for feature branches.
+- Continue following the existing branch → commit → push → PR → stop workflow.
