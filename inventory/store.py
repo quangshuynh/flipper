@@ -8,10 +8,12 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
+SALE_COMPONENT_EFFECTS = ("reduce", "increase")
+RECONCILIATION_CATEGORIES = ("fees", "shipping", "refunds", "adjustments")
 STATUS_TRANSITIONS = {
     "acquired": frozenset({"listed", "archived"}),
     "listed": frozenset({"acquired", "sold", "archived"}),
@@ -114,6 +116,8 @@ class SaleCostRecord:
     amount_scale: int
     currency: str
     source: str
+    effect: str
+    related_cost_id: str | None
     external_transaction_id: str | None
     external_component_key: str | None
     note: str
@@ -383,6 +387,43 @@ class InventoryStore:
                     END"""
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (6)")
+            if 7 not in versions:
+                connection.execute(
+                    "ALTER TABLE sale_costs ADD COLUMN effect TEXT NOT NULL DEFAULT 'reduce' "
+                    "CHECK (effect IN ('reduce', 'increase'))"
+                )
+                connection.execute(
+                    "ALTER TABLE sale_costs ADD COLUMN related_cost_internal_id INTEGER "
+                    "REFERENCES sale_costs(internal_id) ON DELETE RESTRICT"
+                )
+                connection.execute(
+                    """CREATE UNIQUE INDEX sale_costs_one_external_reversal
+                    ON sale_costs (related_cost_internal_id)
+                    WHERE source = 'ebay_finances' AND effect = 'increase'"""
+                )
+                connection.execute(
+                    """CREATE TRIGGER sale_cost_relationship_insert
+                    BEFORE INSERT ON sale_costs
+                    WHEN (NEW.effect = 'reduce' AND NEW.related_cost_internal_id IS NOT NULL) OR
+                         (NEW.source = 'ebay_finances' AND NEW.effect = 'increase' AND
+                          NEW.related_cost_internal_id IS NULL)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'invalid sale cost relationship');
+                    END"""
+                )
+                connection.execute(
+                    """CREATE TABLE sale_reconciliation_confirmations (
+                        sale_internal_id INTEGER NOT NULL,
+                        category TEXT NOT NULL CHECK (category IN (
+                            'fees', 'shipping', 'refunds', 'adjustments'
+                        )),
+                        confirmed_at TEXT NOT NULL,
+                        PRIMARY KEY (sale_internal_id, category),
+                        FOREIGN KEY (sale_internal_id) REFERENCES sales(internal_id)
+                            ON DELETE RESTRICT
+                    )"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (7)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -798,6 +839,7 @@ class InventoryStore:
         currency: str | None = None,
         source: str = "manual",
         note: str = "",
+        effect: str = "reduce",
     ) -> SaleCostRecord:
         """Persist one explicit, nonnegative component that reduces proceeds."""
         if category not in SALE_COST_TYPES:
@@ -806,6 +848,8 @@ class InventoryStore:
             raise SaleCostValidationError(
                 f"cost source must be one of: {', '.join(SALE_COST_SOURCES)}"
             )
+        if effect not in SALE_COMPONENT_EFFECTS:
+            raise SaleCostValidationError("effect must be reduce or increase")
         if source != "manual":
             raise SaleCostValidationError(
                 "external sale costs must be imported through their source integration"
@@ -836,8 +880,8 @@ class InventoryStore:
             cursor = connection.execute(
                 """INSERT INTO sale_costs (
                     cost_id, sale_internal_id, category, amount_minor, amount_scale,
-                    currency, source, note, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    currency, source, note, created_at, effect
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     cost_id,
                     sale["internal_id"],
@@ -848,6 +892,7 @@ class InventoryStore:
                     source,
                     note.strip(),
                     self._utc_now(),
+                    effect,
                 ),
             )
             connection.execute(
@@ -874,12 +919,16 @@ class InventoryStore:
         external_transaction_id: str,
         external_component_key: str,
         note: str = "",
+        effect: str = "reduce",
+        related_cost_id: str | None = None,
     ) -> tuple[SaleCostRecord, bool]:
         """Atomically validate and persist one externally identified Finances cost."""
         if category not in SALE_COST_TYPES:
             raise SaleCostValidationError(f"cost type must be one of: {', '.join(SALE_COST_TYPES)}")
         transaction_id = self._required(external_transaction_id, "external transaction ID")
         component_key = self._required(external_component_key, "external component key")
+        if effect not in SALE_COMPONENT_EFFECTS:
+            raise SaleCostValidationError("effect must be reduce or increase")
         try:
             amount_minor, amount_scale = self._scaled_amount(amount)
         except SaleImportError as exc:
@@ -899,11 +948,30 @@ class InventoryStore:
                     f"cost currency {component_currency} does not match sale currency "
                     f"{sale['currency']}; currency conversion is not supported"
                 )
+            related = None
+            if related_cost_id is not None:
+                related = connection.execute(
+                    "SELECT * FROM sale_costs WHERE cost_id = ?", (related_cost_id.upper(),)
+                ).fetchone()
+                if related is None or related["sale_internal_id"] != sale["internal_id"]:
+                    raise SaleCostValidationError("related component must belong to this sale")
+                if related["source"] != "ebay_finances" or related["effect"] != "reduce":
+                    raise SaleCostValidationError(
+                        "reversal must link to an imported reducing component"
+                    )
+            if effect == "increase" and related is None:
+                raise SaleCostValidationError(
+                    "imported increasing adjustment requires a relationship"
+                )
             existing = connection.execute(
-                """SELECT sale_costs.*, sales.sale_id
+                """SELECT sale_costs.*, sales.sale_id,
+                           related.cost_id AS related_cost_id
                 FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
-                WHERE source = 'ebay_finances' AND external_transaction_id = ?
-                  AND external_component_key = ?""",
+                LEFT JOIN sale_costs AS related
+                  ON related.internal_id = sale_costs.related_cost_internal_id
+                WHERE sale_costs.source = 'ebay_finances'
+                  AND sale_costs.external_transaction_id = ?
+                  AND sale_costs.external_component_key = ?""",
                 (transaction_id, component_key),
             ).fetchone()
             immutable = (
@@ -912,6 +980,8 @@ class InventoryStore:
                 amount_minor,
                 amount_scale,
                 component_currency,
+                effect,
+                related["internal_id"] if related is not None else None,
             )
             if existing is not None:
                 persisted = (
@@ -920,6 +990,8 @@ class InventoryStore:
                     existing["amount_minor"],
                     existing["amount_scale"],
                     existing["currency"],
+                    existing["effect"],
+                    existing["related_cost_internal_id"],
                 )
                 if persisted != immutable:
                     raise SaleCostConflictError(
@@ -935,8 +1007,8 @@ class InventoryStore:
                 """INSERT INTO sale_costs (
                     cost_id, sale_internal_id, category, amount_minor, amount_scale,
                     currency, source, note, created_at, external_transaction_id,
-                    external_component_key
-                ) VALUES (?, ?, ?, ?, ?, ?, 'ebay_finances', ?, ?, ?, ?)""",
+                    external_component_key, effect, related_cost_internal_id
+                ) VALUES (?, ?, ?, ?, ?, ?, 'ebay_finances', ?, ?, ?, ?, ?, ?)""",
                 (
                     cost_id,
                     sale["internal_id"],
@@ -948,6 +1020,8 @@ class InventoryStore:
                     self._utc_now(),
                     transaction_id,
                     component_key,
+                    effect,
+                    related["internal_id"] if related is not None else None,
                 ),
             )
             connection.execute(
@@ -961,13 +1035,79 @@ class InventoryStore:
             connection.close()
         return self.get_sale_cost(cost_id), True
 
+    def find_imported_reversal_target(
+        self, sale_id: str, *, category: str, external_component_key: str
+    ) -> SaleCostRecord | None:
+        """Return a unique unreversed imported reducing component, never amount-match."""
+        candidates = [
+            cost
+            for cost in self.list_sale_costs(sale_id)
+            if cost.source == "ebay_finances"
+            and cost.effect == "reduce"
+            and cost.category == category
+            and cost.external_component_key == external_component_key
+        ]
+        reversed_ids = {
+            cost.related_cost_id
+            for cost in self.list_sale_costs(sale_id)
+            if cost.effect == "increase" and cost.related_cost_id is not None
+        }
+        candidates = [cost for cost in candidates if cost.cost_id not in reversed_ids]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def set_reconciliation_confirmation(
+        self, sale_id: str, category: str, *, confirmed: bool
+    ) -> None:
+        if category not in RECONCILIATION_CATEGORIES:
+            raise SaleCostValidationError(
+                f"reconciliation category must be one of: {', '.join(RECONCILIATION_CATEGORIES)}"
+            )
+        sale = self.get_sale(sale_id)
+        with self._connect() as connection:
+            if confirmed:
+                connection.execute(
+                    "INSERT OR REPLACE INTO sale_reconciliation_confirmations "
+                    "(sale_internal_id, category, confirmed_at) VALUES (?, ?, ?)",
+                    (sale.internal_id, category, self._utc_now()),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM sale_reconciliation_confirmations "
+                    "WHERE sale_internal_id = ? AND category = ?",
+                    (sale.internal_id, category),
+                )
+
+    def reconciliation_status(self, sale_id: str) -> tuple[str, tuple[str, ...]]:
+        sale = self.get_sale(sale_id)
+        with self._connect() as connection:
+            confirmed = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT category FROM sale_reconciliation_confirmations "
+                    "WHERE sale_internal_id = ?",
+                    (sale.internal_id,),
+                )
+            }
+        missing = tuple(
+            category for category in RECONCILIATION_CATEGORIES if category not in confirmed
+        )
+        status = (
+            "fully_reconciled"
+            if not missing
+            else ("partially_reconciled" if confirmed else "incomplete")
+        )
+        return status, missing
+
     def get_sale_cost(self, cost_id: str) -> SaleCostRecord:
         self.initialize()
         with self._connect() as connection:
             row = connection.execute(
-                """SELECT sale_costs.*, sales.sale_id
+                """SELECT sale_costs.*, sales.sale_id,
+                           related.cost_id AS related_cost_id
                 FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
-                WHERE cost_id = ?""",
+                LEFT JOIN sale_costs AS related
+                  ON related.internal_id = sale_costs.related_cost_internal_id
+                WHERE sale_costs.cost_id = ?""",
                 (cost_id.upper(),),
             ).fetchone()
         if row is None:
@@ -978,9 +1118,12 @@ class InventoryStore:
         sale = self.get_sale(sale_id)
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT sale_costs.*, sales.sale_id
+                """SELECT sale_costs.*, sales.sale_id,
+                           related.cost_id AS related_cost_id
                 FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
-                WHERE sale_internal_id = ? ORDER BY sale_costs.internal_id""",
+                LEFT JOIN sale_costs AS related
+                  ON related.internal_id = sale_costs.related_cost_internal_id
+                WHERE sale_costs.sale_internal_id = ? ORDER BY sale_costs.internal_id""",
                 (sale.internal_id,),
             ).fetchall()
         return [self._sale_cost_record(row) for row in rows]
@@ -992,9 +1135,12 @@ class InventoryStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                """SELECT sale_costs.*, sales.sale_id
+                """SELECT sale_costs.*, sales.sale_id,
+                           related.cost_id AS related_cost_id
                 FROM sale_costs JOIN sales ON sales.internal_id = sale_costs.sale_internal_id
-                WHERE cost_id = ?""",
+                LEFT JOIN sale_costs AS related
+                  ON related.internal_id = sale_costs.related_cost_internal_id
+                WHERE sale_costs.cost_id = ?""",
                 (cost_id.upper(),),
             ).fetchone()
             if row is None:
@@ -1027,6 +1173,8 @@ class InventoryStore:
             amount_scale=row["amount_scale"],
             currency=row["currency"],
             source=row["source"],
+            effect=row["effect"],
+            related_cost_id=row["related_cost_id"],
             external_transaction_id=row["external_transaction_id"],
             external_component_key=row["external_component_key"],
             note=row["note"],

@@ -110,6 +110,62 @@ def test_supported_debit_refund_normalizes_sign(tmp_path):
     assert (result.cost.category, result.cost.amount) == ("refund", Decimal("7.50"))
 
 
+def test_shipping_label_debit_imports_but_sale_revenue_does_not_become_shipping(tmp_path):
+    store = sold_store(tmp_path)
+    sale_transaction = normalize_transaction(raw_transaction(fees=[]))
+    shipping = normalize_transaction(
+        raw_transaction("label-1", "SHIPPING_LABEL", amount="7.255", booking_entry="DEBIT", fees=[])
+    )
+    assert (
+        import_finance_transactions([sale_transaction], store)[0].status
+        is FinanceImportStatus.UNSUPPORTED
+    )
+    result = import_finance_transactions([shipping], store)[0]
+    assert result.status is FinanceImportStatus.IMPORTED
+    assert (result.cost.category, result.cost.amount, result.cost.effect) == (
+        "shipping_cost",
+        Decimal("7.255"),
+        "reduce",
+    )
+
+
+def test_fee_credit_links_to_original_and_increases_profit_once(tmp_path):
+    store = sold_store(tmp_path)
+    debit = normalize_transaction(raw_transaction())
+    credit = normalize_transaction(
+        raw_transaction(
+            "credit-1",
+            "CREDIT",
+            amount="1.25",
+            booking_entry="CREDIT",
+            fees=[{"feeType": "FINAL_VALUE_FEE", "amount": {"value": "1.25", "currency": "USD"}}],
+        )
+    )
+    original = import_finance_transactions([debit], store)[0].cost
+    first = import_finance_transactions([credit], store)[0]
+    repeated = import_finance_transactions([credit], store)[0]
+    assert first.status is FinanceImportStatus.IMPORTED
+    assert repeated.status is FinanceImportStatus.ALREADY_IMPORTED
+    assert first.cost.effect == "increase"
+    assert first.cost.related_cost_id == original.cost_id
+    costs = store.list_sale_costs("S000001")
+    economics = calculate_sale_economics(
+        gross=Decimal("50"),
+        acquisition_cost=Decimal("10"),
+        currency="USD",
+        acquisition_currency="USD",
+        components=[EconomicComponent(c.category, c.amount, c.currency, c.effect) for c in costs],
+    )
+    assert economics.recorded_profit == Decimal("36.125")
+
+
+def test_credit_without_unique_prior_component_is_unsupported(tmp_path):
+    store = sold_store(tmp_path)
+    credit = normalize_transaction(raw_transaction("credit-1", "CREDIT", booking_entry="CREDIT"))
+    assert import_finance_transactions([credit], store)[0].status is FinanceImportStatus.UNSUPPORTED
+    assert store.list_sale_costs("S000001") == []
+
+
 @pytest.mark.parametrize("transaction_type", ["TRANSFER", "CREDIT", "PAYOUT", "ADJUSTMENT"])
 def test_unsupported_types_including_payouts_are_not_accounted(tmp_path, transaction_type):
     store = sold_store(tmp_path)
@@ -256,7 +312,7 @@ def test_v5_migration_preserves_manual_cost_and_adds_empty_external_identity(tmp
     with sqlite3.connect(store.path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
 
 
 def test_v5_migration_rejects_unidentified_external_history(tmp_path):
@@ -279,7 +335,7 @@ def test_v5_migration_rejects_unidentified_external_history(tmp_path):
         assert connection.execute("SELECT source FROM sale_costs").fetchone() == ("ebay_finances",)
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (7,)]
 
 
 def test_import_cli_summary_and_finances_command_remains_read_only(monkeypatch, tmp_path, capsys):
