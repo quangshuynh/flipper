@@ -6,6 +6,7 @@ from keyring.errors import KeyringError
 from ebay.seller_oauth import (
     FINANCES_SCOPE,
     FULFILLMENT_READONLY_SCOPE,
+    TRADING_SCOPE,
     SELLER_SCOPES,
     SellerNotConnectedError,
     SellerOAuthClient,
@@ -99,7 +100,7 @@ def test_refreshes_near_expiry_and_uses_required_scope():
     now[0] = 161
     assert oauth.access_token() == "second"
     assert oauth._session.calls[-1][1]["data"]["scope"] == " ".join(SELLER_SCOPES)
-    assert set(SELLER_SCOPES) == {FULFILLMENT_READONLY_SCOPE, FINANCES_SCOPE}
+    assert set(SELLER_SCOPES) == {FULFILLMENT_READONLY_SCOPE, FINANCES_SCOPE, TRADING_SCOPE}
 
 
 def test_disconnected_and_revoked_refresh_are_safe():

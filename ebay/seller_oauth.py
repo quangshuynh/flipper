@@ -17,7 +17,8 @@ from keyring.errors import KeyringError
 
 FULFILLMENT_READONLY_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly"
 FINANCES_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.finances"
-SELLER_SCOPES = (FULFILLMENT_READONLY_SCOPE, FINANCES_SCOPE)
+TRADING_SCOPE = "https://api.ebay.com/oauth/api_scope"
+SELLER_SCOPES = (FULFILLMENT_READONLY_SCOPE, FINANCES_SCOPE, TRADING_SCOPE)
 REQUEST_TIMEOUT_SECONDS = 15
 EXPIRY_SKEW_SECONDS = 60
 

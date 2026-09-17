@@ -6,6 +6,9 @@ from keyring.errors import KeyringError
 
 from inventory.store import InventoryStore
 from inventory.attachments import AttachmentService
+from ebay.listings import EbayActiveListing
+from ebay.orders import Money
+import web.app as web_app
 from web.app import app
 
 
@@ -38,6 +41,38 @@ def _sold(store, number, *, gross="100.00", currency="USD"):
         sold_at=datetime(2026, 9, number, 12, tzinfo=timezone.utc),
     )
     return item, sale
+
+
+def test_live_ebay_listings_page_is_isolated_and_renders_state(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    store.add(
+        title="Local recorder",
+        source="gift",
+        acquired_at="2026-03-01",
+        acquisition_cost="0",
+    )
+    listing = EbayActiveListing(
+        "137744631273",
+        "Q0001",
+        "Recorder",
+        "Active",
+        Money(Decimal("75.00"), "USD"),
+        1,
+    )
+    monkeypatch.setattr(web_app.SellerOAuthConfig, "from_environment", lambda: object())
+    monkeypatch.setattr(web_app, "SellerOAuthClient", lambda config: object())
+    monkeypatch.setattr(
+        web_app,
+        "ActiveListingsClient",
+        lambda oauth: type("C", (), {"get_active_listings": lambda self: [listing]})(),
+    )
+
+    response = client.get("/ebay/listings")
+
+    assert response.status_code == 200
+    assert "Recorder" in response.text
+    assert "MATCHED" in response.text
+    assert "buyer" not in response.text.lower()
 
 
 def test_web_application_starts_and_empty_states(monkeypatch, tmp_path):
