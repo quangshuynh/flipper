@@ -61,7 +61,7 @@ def test_same_original_filename_can_be_attached_more_than_once(tmp_path):
     assert len(service.list(record.inventory_id)) == 2
 
 
-def test_add_rejects_unknown_item_missing_unsupported_and_oversized_files(tmp_path, monkeypatch):
+def test_add_rejects_unknown_item_missing_unsupported_and_oversized_files(tmp_path):
     store = InventoryStore(tmp_path / "inventory.db")
     item(store)
     service = AttachmentService(store)
@@ -73,15 +73,10 @@ def test_add_rejects_unknown_item_missing_unsupported_and_oversized_files(tmp_pa
     with pytest.raises(AttachmentValidationError, match="unsupported"):
         service.add("Q0001", source(tmp_path, "script.exe", b"MZ"))
     oversized = source(tmp_path, "large.pdf", PDF)
-    real_stat = oversized.stat
-
-    class LargeStat:
-        st_size = MAX_ATTACHMENT_BYTES + 1
-
-    monkeypatch.setattr(type(oversized), "stat", lambda self: LargeStat())
+    with oversized.open("r+b") as handle:
+        handle.truncate(MAX_ATTACHMENT_BYTES + 1)
     with pytest.raises(AttachmentValidationError, match="25 MiB"):
         service.add("Q0001", oversized)
-    monkeypatch.setattr(type(oversized), "stat", lambda self: real_stat())
 
 
 @pytest.mark.parametrize(
