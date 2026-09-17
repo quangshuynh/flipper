@@ -4,6 +4,20 @@ The web [Deals workspace](http://127.0.0.1:8000/deals) is Flipper's first live d
 It uses eBay's official Browse API and performs no scraping or marketplace writes. Search begins only
 when a user submits keywords; there is no polling or background ingestion.
 
+## Taxonomy mapping
+
+eBay category trees are marketplace-specific. Flipper keeps its 18 stable categories and maps an
+eBay leaf through official ancestry rather than copying eBay's taxonomy into the product model.
+
+Commerce Taxonomy supplies the default tree ID, version, and hierarchy. Flipper builds one ancestry
+index for a result set, caches at most eight environment/marketplace entries for 24 hours, and reuses
+an unchanged version. See eBay's official
+[Categories for Buy APIs](https://developer.ebay.com/api-docs/buy/buy-categories.html).
+
+If Taxonomy is unavailable or malformed, Browse discovery still works. A known direct US top-level
+ID is a weak fallback; otherwise Flipper uses **Everything Else** with unknown mapping confidence and
+explicit fallback provenance. It never presents an unknown leaf mapping as authoritative.
+
 ## Authentication and configuration
 
 Discovery uses an OAuth **Application access token** minted by the client-credentials grant. It is

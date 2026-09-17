@@ -49,10 +49,35 @@ class AmountStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ProvenanceKind(str, Enum):
+    SOURCE_API = "source_api"
+    USER_ASSUMPTION = "user_assumption"
+    FLIPPER_CALCULATION = "flipper_calculation"
+    HISTORICAL_FLIPPER_DATA = "historical_flipper_data"
+    CATEGORY_HEURISTIC = "category_heuristic"
+    MARKET_COMPARABLE = "market_comparable"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class EvidenceProvenance:
+    kind: ProvenanceKind
+    label: str
+    inputs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("provenance label is required")
+
+
+UNKNOWN_PROVENANCE = EvidenceProvenance(ProvenanceKind.UNKNOWN, "Unavailable / unknown")
+
+
 @dataclass(frozen=True)
 class CostComponent:
     status: AmountStatus
     money: Money | None = None
+    provenance: EvidenceProvenance = UNKNOWN_PROVENANCE
 
     def __post_init__(self) -> None:
         if (self.status in {AmountStatus.ACTUAL, AmountStatus.ESTIMATED}) != (
@@ -65,12 +90,16 @@ class CostComponent:
             raise ValueError("cost components cannot be negative")
 
     @classmethod
-    def actual(cls, amount: Decimal | int | str, currency: str = "USD") -> CostComponent:
-        return cls(AmountStatus.ACTUAL, Money.of(amount, currency))
+    def actual(
+        cls, amount: Decimal | int | str, currency: str = "USD", *, provenance=UNKNOWN_PROVENANCE
+    ) -> CostComponent:
+        return cls(AmountStatus.ACTUAL, Money.of(amount, currency), provenance)
 
     @classmethod
-    def estimated(cls, amount: Decimal | int | str, currency: str = "USD") -> CostComponent:
-        return cls(AmountStatus.ESTIMATED, Money.of(amount, currency))
+    def estimated(
+        cls, amount: Decimal | int | str, currency: str = "USD", *, provenance=UNKNOWN_PROVENANCE
+    ) -> CostComponent:
+        return cls(AmountStatus.ESTIMATED, Money.of(amount, currency), provenance)
 
     @classmethod
     def unknown(cls) -> CostComponent:
@@ -105,6 +134,8 @@ class DealOpportunity:
     observed_at: datetime | None = None
     normalized_attributes: Mapping[str, str] = field(default_factory=dict)
     category_attributes: Mapping[str, str] = field(default_factory=dict)
+    base_price_provenance: EvidenceProvenance = UNKNOWN_PROVENANCE
+    category_provenance: EvidenceProvenance = UNKNOWN_PROVENANCE
 
     def __post_init__(self) -> None:
         if not self.title.strip():
@@ -124,6 +155,7 @@ class TimeToSale:
     minimum_days: int
     maximum_days: int
     source: str
+    provenance: EvidenceProvenance = UNKNOWN_PROVENANCE
 
     def __post_init__(self) -> None:
         if self.minimum_days <= 0 or self.maximum_days < self.minimum_days:
@@ -213,3 +245,7 @@ class DealEconomics:
     roi_state: RoiState
     profit_velocity: ProfitVelocity | None
     unavailable_reasons: tuple[str, ...]
+    provenance: Mapping[str, EvidenceProvenance] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "provenance", MappingProxyType(dict(self.provenance)))

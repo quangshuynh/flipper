@@ -52,16 +52,26 @@ def compare(left: DealEvaluation, right: DealEvaluation) -> OpportunityCompariso
             return
         (left_wins if left_value < right_value else right_wins).append(name)
 
-    higher(
+    def money_higher(name: str, left_money, right_money) -> None:
+        if left_money is None or right_money is None or left_money.currency != right_money.currency:
+            return
+        higher(name, left_money.amount, right_money.amount)
+
+    def money_lower(name: str, left_money, right_money) -> None:
+        if left_money is None or right_money is None or left_money.currency != right_money.currency:
+            return
+        lower(name, left_money.amount, right_money.amount)
+
+    money_higher(
         "expected net profit",
-        getattr(left.economics.expected_net_profit, "amount", None),
-        getattr(right.economics.expected_net_profit, "amount", None),
+        left.economics.expected_net_profit,
+        right.economics.expected_net_profit,
     )
     higher("ROI", left.economics.roi, right.economics.roi)
-    lower(
+    money_lower(
         "capital tied up",
-        getattr(left.economics.capital_tied_up, "amount", None),
-        getattr(right.economics.capital_tied_up, "amount", None),
+        left.economics.capital_tied_up,
+        right.economics.capital_tied_up,
     )
     if left.time_to_sale and right.time_to_sale:
         lower(
@@ -69,11 +79,12 @@ def compare(left: DealEvaluation, right: DealEvaluation) -> OpportunityCompariso
         )
     left_velocity = left.economics.profit_velocity
     right_velocity = right.economics.profit_velocity
-    higher(
+    money_higher(
         "conservative profit velocity",
-        getattr(getattr(left_velocity, "conservative_profit_per_day", None), "amount", None),
-        getattr(getattr(right_velocity, "conservative_profit_per_day", None), "amount", None),
+        getattr(left_velocity, "conservative_profit_per_day", None),
+        getattr(right_velocity, "conservative_profit_per_day", None),
     )
+    lower("risk-factor count", len(left.risks), len(right.risks))
     if not left_wins and not right_wins:
         result = ComparisonResult.INSUFFICIENT_EVIDENCE
     elif left_wins and right_wins:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -14,6 +15,8 @@ import requests
 BROWSE_SCOPE = "https://api.ebay.com/oauth/api_scope"
 REQUEST_TIMEOUT_SECONDS = 15
 MAX_RESULTS = 50
+TAXONOMY_CACHE_SECONDS = 24 * 60 * 60
+MAX_TAXONOMY_CACHE_ENTRIES = 8
 
 
 class EbayDiscoveryError(RuntimeError):
@@ -46,6 +49,10 @@ class DiscoveryConfig:
 
 class EbayDiscoveryClient:
     """Search public listings using an Application token, never seller authorization."""
+
+    _taxonomy_cache: OrderedDict[tuple[str, str], tuple[float, str, dict[str, tuple[str, ...]]]] = (
+        OrderedDict()
+    )
 
     def __init__(self, config: DiscoveryConfig, *, session=None, clock=time.monotonic) -> None:
         self.config = config
@@ -171,3 +178,57 @@ class EbayDiscoveryClient:
         if not item_id or len(item_id) > 200 or any(char.isspace() for char in item_id):
             raise ValueError("invalid eBay item identity")
         return self._get(f"/buy/browse/v1/item/{quote(item_id, safe='|')}")
+
+    @classmethod
+    def clear_taxonomy_cache(cls) -> None:
+        cls._taxonomy_cache.clear()
+
+    def category_ancestry(self) -> dict[str, tuple[str, ...]]:
+        """Build a bounded, version-aware ancestry index without per-item requests."""
+        cache_key = (self.config.environment, self.config.marketplace_id)
+        cached = self._taxonomy_cache.get(cache_key)
+        now = self.clock()
+        if cached and now - cached[0] < TAXONOMY_CACHE_SECONDS:
+            self._taxonomy_cache.move_to_end(cache_key)
+            return cached[2]
+        tree_info = self._get(
+            "/commerce/taxonomy/v1/get_default_category_tree_id",
+            params={"marketplace_id": self.config.marketplace_id},
+        )
+        tree_id = tree_info.get("categoryTreeId")
+        version = tree_info.get("categoryTreeVersion")
+        if (
+            not isinstance(tree_id, str)
+            or not tree_id
+            or not isinstance(version, str)
+            or not version
+        ):
+            raise EbayDiscoveryError("eBay taxonomy returned malformed data")
+        if cached and cached[1] == version:
+            self._taxonomy_cache[cache_key] = (now, version, cached[2])
+            return cached[2]
+        body = self._get(f"/commerce/taxonomy/v1/category_tree/{quote(tree_id, safe='')}")
+        if body.get("categoryTreeVersion") != version:
+            raise EbayDiscoveryError("eBay taxonomy returned inconsistent data")
+        index: dict[str, tuple[str, ...]] = {}
+
+        def visit(node: Any, ancestors: tuple[str, ...] = ()) -> None:
+            if not isinstance(node, dict):
+                raise EbayDiscoveryError("eBay taxonomy returned malformed data")
+            category = node.get("category")
+            if not isinstance(category, dict) or not isinstance(category.get("categoryId"), str):
+                raise EbayDiscoveryError("eBay taxonomy returned malformed data")
+            category_id = category["categoryId"]
+            index[category_id] = ancestors
+            children = node.get("childCategoryTreeNodes", [])
+            if not isinstance(children, list):
+                raise EbayDiscoveryError("eBay taxonomy returned malformed data")
+            for child in children:
+                visit(child, ancestors + (category_id,))
+
+        visit(body.get("rootCategoryNode"))
+        self._taxonomy_cache[cache_key] = (now, version, index)
+        self._taxonomy_cache.move_to_end(cache_key)
+        while len(self._taxonomy_cache) > MAX_TAXONOMY_CACHE_ENTRIES:
+            self._taxonomy_cache.popitem(last=False)
+        return index

@@ -16,6 +16,8 @@ from deals.models import (
     EvidenceLevel,
     LiquidityEvidence,
     Money,
+    EvidenceProvenance,
+    ProvenanceKind,
     RiskFactor,
     RoiState,
     SourceIdentity,
@@ -193,6 +195,38 @@ def test_component_status_requires_amount_only_when_known():
     assert CostComponent.unknown().status is AmountStatus.UNKNOWN
     with pytest.raises(ValueError):
         CostComponent(AmountStatus.ESTIMATED)
+
+
+def test_provenance_is_typed_separate_from_confidence_and_derived_lineage_is_explicit():
+    assumption = EvidenceProvenance(ProvenanceKind.USER_ASSUMPTION, "User assumption")
+    resale = CostComponent.estimated("150", provenance=assumption)
+    result = calculate_economics(base_price=Money.of("75"), expected_resale=resale)
+    assert resale.provenance.kind is ProvenanceKind.USER_ASSUMPTION
+    assert result.provenance["expected_net_profit"].kind is ProvenanceKind.FLIPPER_CALCULATION
+    assert result.provenance["expected_net_profit"].inputs == (
+        "landed cost",
+        "expected net proceeds",
+    )
+    assert ConfidenceEvidence().pricing is None
+    assert CostComponent.unknown().provenance.kind is ProvenanceKind.UNKNOWN
+
+
+def test_comparison_does_not_compare_native_money_across_currencies():
+    left = DealEvaluation(
+        calculate_economics(
+            base_price=Money.of("10", "USD"),
+            expected_resale=CostComponent.estimated("20", "USD"),
+        )
+    )
+    right = DealEvaluation(
+        calculate_economics(
+            base_price=Money.of("9", "CAD"),
+            expected_resale=CostComponent.estimated("19", "CAD"),
+        )
+    )
+    result = compare(left, right)
+    assert "capital tied up" not in result.left_advantages + result.right_advantages
+    assert "expected net profit" not in result.left_advantages + result.right_advantages
 
 
 def test_generalized_cli_prints_ephemeral_economics(capsys):

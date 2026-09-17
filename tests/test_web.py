@@ -579,3 +579,78 @@ def test_deal_acquisition_rejects_cross_origin(monkeypatch, tmp_path):
         headers={"origin": "https://attacker.example"},
     )
     assert response.status_code == 403
+
+
+class _ComparisonDiscovery:
+    def search(self, *args, **kwargs):
+        return {"itemSummaries": []}
+
+    def get_item(self, item_id):
+        number = item_id.rsplit("|", 2)[1]
+        return _discovery_item() | {
+            "itemId": item_id,
+            "title": f"Camera {number}",
+            "price": {"value": number, "currency": "USD"},
+        }
+
+
+def test_comparison_bounds_duplicates_refetch_and_independent_assumptions(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(web_app, "_discovery", _ComparisonDiscovery)
+    too_few = client.get("/deals/compare", params={"item_id": "v1|10|0"})
+    duplicate = client.get(
+        "/deals/compare", params=[("item_id", "v1|10|0"), ("item_id", "v1|10|0")]
+    )
+    too_many = client.get(
+        "/deals/compare",
+        params=[("item_id", f"v1|{value}|0") for value in range(10, 15)],
+    )
+    compared = client.get(
+        "/deals/compare",
+        params=[
+            ("item_id", "v1|10|0"),
+            ("item_id", "v1|20|0"),
+            ("d0_expected_resale", "50"),
+            ("d1_expected_resale", "100"),
+            ("d0_tax", "0"),
+            ("d1_tax", "0"),
+            ("d0_travel_cost", "0"),
+            ("d1_travel_cost", "0"),
+            ("d0_other_acquisition_cost", "0"),
+            ("d1_other_acquisition_cost", "0"),
+            ("d0_selling_fees", "0"),
+            ("d1_selling_fees", "0"),
+            ("d0_outbound_shipping", "0"),
+            ("d1_outbound_shipping", "0"),
+            ("d0_other_selling_cost", "0"),
+            ("d1_other_selling_cost", "0"),
+            ("d0_minimum_sale_days", "2"),
+            ("d0_maximum_sale_days", "4"),
+            ("d0_asking_price", "0.01"),
+        ],
+    )
+    assert too_few.status_code == duplicate.status_code == too_many.status_code == 400
+    assert compared.status_code == 200
+    assert "USD 35.00" in compared.text and "USD 75.00" in compared.text
+    assert "USD 10.00" in compared.text and "USD 20.00" in compared.text
+    assert "USD 0.01" not in compared.text
+    assert 'aria-label="Deal comparison"' in compared.text
+    assert store.list() == []
+
+
+def test_comparison_isolates_disappeared_upstream_item(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+
+    class Partial(_ComparisonDiscovery):
+        def get_item(self, item_id):
+            if item_id == "v1|gone|0":
+                raise web_app.EbayDiscoveryError("gone")
+            return super().get_item(item_id)
+
+    monkeypatch.setattr(web_app, "_discovery", Partial)
+    response = client.get(
+        "/deals/compare",
+        params=[("item_id", "v1|10|0"), ("item_id", "v1|gone|0")],
+    )
+    assert response.status_code == 200
+    assert "upstream item is unavailable" in response.text
