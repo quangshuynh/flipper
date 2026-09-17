@@ -43,6 +43,7 @@ from deals.models import (
     TimeToSale,
 )
 from deals.research import EphemeralResearchStore
+from deals.snapshots import SnapshotPayloadError, build_snapshot_payload
 from deals.travel import TripEstimate, trip_from_values
 from ebay.compliance import app
 from ebay.discovery import DiscoveryConfig, EbayDiscoveryClient, EbayDiscoveryError
@@ -57,6 +58,8 @@ from inventory.store import (
     InventoryNotFoundError,
     InventoryValidationError,
     InventoryStore,
+    ResearchSnapshotNotFoundError,
+    ResearchSnapshotValidationError,
     SaleNotFoundError,
 )
 from reports.service import (
@@ -109,9 +112,16 @@ def _money_two_places(value: Decimal | None, currency: str = "USD") -> str:
     return f"{currency} {rounded:,.2f}"
 
 
+def _snapshot_money(value) -> str:
+    if not value:
+        return "Unknown"
+    return _money(Decimal(value["amount"]), value["currency"])
+
+
 templates.env.filters["money"] = _money
 templates.env.filters["money2"] = _money_two_places
 templates.env.filters["percent"] = _percent
+templates.env.filters["snapshot_money"] = _snapshot_money
 
 
 @pass_context
@@ -378,8 +388,26 @@ def _render_deal_detail(
         comparable_conditions=ComparableCondition,
         source_identities=SourceIdentity,
         today=_today().isoformat(),
+        save_token=uuid4().hex,
         status_code=status_code,
     )
+
+
+def _snapshot_assumptions(values: dict[str, str], currency: str, trip) -> dict[str, CostComponent]:
+    result = {
+        "tax": _estimated(values.get("tax", ""), currency),
+        "other_acquisition_cost": _estimated(values.get("other_acquisition_cost", ""), currency),
+        "expected_resale": _estimated(values.get("expected_resale", ""), currency),
+        "selling_fees": _estimated(values.get("selling_fees", ""), currency),
+        "outbound_shipping": _estimated(values.get("outbound_shipping", ""), currency),
+        "other_selling_cost": _estimated(values.get("other_selling_cost", ""), currency),
+    }
+    result["travel_cost"] = (
+        trip.total_travel_cost
+        if trip is not None
+        else _estimated(values.get("travel_cost", ""), currency)
+    )
+    return result
 
 
 def _comparable_from_fields(fields: dict[str, str], category: DealCategory) -> Comparable:
@@ -932,6 +960,126 @@ def deal_compare(request: Request):
         pareto=pareto,
         error=None,
     )
+
+
+@app.get("/deals/history", response_class=HTMLResponse)
+def research_history(request: Request):
+    return _render(
+        request,
+        "research_history.html",
+        section="deals",
+        title="Research history",
+        snapshots=_store().list_research_snapshots(),
+    )
+
+
+@app.get("/deals/history/{snapshot_id}", response_class=HTMLResponse)
+def research_snapshot_detail(request: Request, snapshot_id: str):
+    try:
+        snapshot = _store().get_research_snapshot(snapshot_id)
+    except (ResearchSnapshotNotFoundError, SnapshotPayloadError):
+        return _render(
+            request,
+            "error.html",
+            section="deals",
+            title="Research snapshot unavailable",
+            message="That saved research snapshot was not found or cannot be safely read.",
+            status_code=404,
+        )
+    return _render(
+        request,
+        "research_snapshot.html",
+        section="deals",
+        title="Saved research snapshot",
+        snapshot=snapshot,
+        payload=snapshot.payload,
+    )
+
+
+async def _save_snapshot(request: Request, opportunity_key: str):
+    fields = await _post_fields(request)
+    path = _opportunity_path(opportunity_key)
+    token = fields.get("save_token", "")
+    values = {
+        name: fields.get(name, "")
+        for name in (
+            "tax",
+            "travel_cost",
+            "other_acquisition_cost",
+            "expected_resale",
+            "selling_fees",
+            "outbound_shipping",
+            "other_selling_cost",
+            "minimum_sale_days",
+            "maximum_sale_days",
+            *TRIP_VALUE_NAMES,
+        )
+    }
+    try:
+        opportunity, shipping, notes = _resolve_opportunity(request, opportunity_key)
+        evaluation, trip = _deal_analysis(opportunity, shipping, values)
+        evidence = research_store.evidence_set(
+            _research_session(request), opportunity_key, as_of=_today()
+        )
+        assumptions = _snapshot_assumptions(values, opportunity.base_price.currency, trip)
+        payload = build_snapshot_payload(
+            opportunity=opportunity,
+            shipping=shipping,
+            notes=notes,
+            assumption_components=assumptions,
+            evaluation=evaluation,
+            trip=trip,
+            evidence=evidence,
+        )
+        snapshot = _store().save_research_snapshot(
+            opportunity_identity=opportunity_key,
+            source=opportunity.source.value,
+            title=opportunity.title,
+            category=opportunity.category.slug,
+            currency=opportunity.base_price.currency,
+            asking_price=opportunity.base_price.amount,
+            expected_resale=(
+                assumptions["expected_resale"].money.amount
+                if assumptions["expected_resale"].money
+                else None
+            ),
+            expected_profit=(
+                evaluation.economics.expected_net_profit.amount
+                if evaluation.economics.expected_net_profit
+                else None
+            ),
+            payload=payload,
+            save_token=token,
+        )
+    except EbayDiscoveryError:
+        return _redirect(path, error_message="eBay discovery is unavailable.")
+    except (LookupError, TypeError, ValueError) as exc:
+        return _redirect(path, error_message=str(exc))
+    return _redirect(f"/deals/history/{snapshot.snapshot_id}", message="Research snapshot saved.")
+
+
+@app.post("/deals/ebay/{item_id}/snapshot")
+async def ebay_snapshot_save(request: Request, item_id: str):
+    return await _save_snapshot(request, _research_key(item_id))
+
+
+@app.post("/deals/opportunities/{opportunity_id}/snapshot")
+async def manual_snapshot_save(request: Request, opportunity_id: str):
+    return await _save_snapshot(request, _manual_key(opportunity_id))
+
+
+@app.post("/deals/history/{snapshot_id}/link")
+async def research_snapshot_link(request: Request, snapshot_id: str):
+    fields = await _post_fields(request)
+    try:
+        snapshot = _store().link_research_snapshot(snapshot_id, fields.get("inventory_id", ""))
+    except (
+        InventoryNotFoundError,
+        ResearchSnapshotNotFoundError,
+        ResearchSnapshotValidationError,
+    ) as exc:
+        return _redirect(f"/deals/history/{snapshot_id}", error_message=str(exc))
+    return _redirect(f"/deals/history/{snapshot.snapshot_id}", message="Inventory link saved.")
 
 
 @app.post("/deals/ebay/{item_id}/comparables")

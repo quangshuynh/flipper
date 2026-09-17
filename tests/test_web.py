@@ -945,3 +945,127 @@ def test_manual_trip_economics_render_validate_and_do_not_become_actual_cost(mon
     record = store.get(acquired.headers["location"].split("/inventory/", 1)[1].split("?", 1)[0])
     assert record.acquisition_cost_cents == 1800
     assert "fuel" not in record.notes.casefold()
+
+
+def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    web_app.research_store.clear()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("snapshot reference URLs must never be requested")
+
+    monkeypatch.setattr("requests.sessions.Session.request", forbidden)
+    created = client.post(
+        "/deals/opportunities",
+        data={
+            "source": "estate-sale",
+            "title": "Snapshot camera",
+            "category": "electronics",
+            "base_price": "20.25",
+            "currency": "USD",
+            "inbound_shipping": "1.75",
+            "condition": "used_tested",
+            "source_url": "https://example.test/listing",
+            "location_text": "Local hall",
+            "notes": "Inspect lens",
+        },
+        follow_redirects=False,
+    )
+    path = created.headers["location"].split("?", 1)[0]
+    comp = {
+        "source": "Manual research",
+        "source_identity": "other",
+        "price": "70",
+        "currency": "USD",
+        "condition": "used_tested",
+        "observed_date": "2026-09-17",
+        "source_url": "https://example.test/comp",
+    }
+    client.post(f"{path}/comparables", data=comp | {"evidence_type": "sold"})
+    client.post(f"{path}/comparables", data=comp | {"evidence_type": "active_asking"})
+    assumptions = {
+        "save_token": "1" * 32,
+        "tax": "2",
+        "expected_resale": "80",
+        "selling_fees": "8",
+        "outbound_shipping": "3",
+        "other_acquisition_cost": "1",
+        "other_selling_cost": "1",
+        "minimum_sale_days": "5",
+        "maximum_sale_days": "10",
+        "one_way_miles": "10",
+        "vehicle_mpg": "20",
+        "gas_price": "4",
+        "additional_travel_cost": "1",
+        "round_trip_minutes": "45",
+    }
+    saved = client.post(f"{path}/snapshot", data=assumptions, follow_redirects=False)
+    retry = client.post(f"{path}/snapshot", data=assumptions, follow_redirects=False)
+    snapshot_path = saved.headers["location"].split("?", 1)[0]
+    detail = client.get(snapshot_path)
+    history = client.get("/deals/history")
+
+    assert saved.status_code == retry.status_code == 303
+    assert retry.headers["location"].split("?", 1)[0] == snapshot_path
+    assert len(store.list_research_snapshots()) == 1
+    assert detail.status_code == history.status_code == 200
+    assert "Saved research snapshot" in detail.text
+    assert "Asking price at snapshot" in detail.text and "USD 20.25" in detail.text
+    assert "Sold" in detail.text and "Active Asking" in detail.text
+    assert "20 miles" in detail.text and "45 minutes" in detail.text
+    assert "User-provided source fact" in detail.text
+    assert "Snapshot camera" in history.text
+
+    rows = next(iter(web_app.research_store._sessions.values()))
+    for row in list(rows[next(iter(rows))]):
+        web_app.research_store.remove(
+            next(iter(web_app.research_store._sessions)), next(iter(rows)), row.comparable_id
+        )
+    assert "https://example.test/comp" in client.get(snapshot_path).text
+
+    item = store.add(
+        title="Camera", source="estate", acquired_at="2026-09-17", acquisition_cost="18.00"
+    )
+    linked = client.post(
+        f"{snapshot_path}/link", data={"inventory_id": item.inventory_id}, follow_redirects=False
+    )
+    assert linked.status_code == 303
+    assert item.inventory_id in client.get(linked.headers["location"]).text
+    assert store.get(item.inventory_id).acquisition_cost == Decimal("18.00")
+
+
+def test_snapshot_routes_reject_cross_origin_and_malformed_ids(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    rejected = client.post(
+        "/deals/opportunities/missing/snapshot",
+        data={"save_token": "a" * 32},
+        headers={"origin": "https://attacker.example"},
+    )
+    missing = client.get("/deals/history/not-a-valid-id")
+    empty = client.get("/deals/history")
+    assert rejected.status_code == 403
+    assert missing.status_code == 404
+    assert "No saved research yet" in empty.text
+
+
+def test_ebay_snapshot_captures_normalized_api_facts_without_raw_secrets(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(web_app, "_discovery", _Discovery)
+    web_app.research_store.clear()
+    response = client.post(
+        "/deals/ebay/v1%7C123%7C0/snapshot",
+        data={"save_token": "2" * 32, "expected_resale": "200", "selling_fees": "20"},
+        follow_redirects=False,
+    )
+    listed = store.list_research_snapshots()[0]
+    snapshot = store.get_research_snapshot(listed.snapshot_id)
+    serialized = str(snapshot.payload)
+
+    assert response.status_code == 303
+    assert snapshot.source == "ebay"
+    assert snapshot.opportunity_identity == "ebay:v1|123|0"
+    assert snapshot.payload["opportunity"]["source_listing_id"] == "v1|123|0"
+    assert snapshot.payload["opportunity"]["base_price_provenance"]["kind"] == "source_api"
+    assert "authorization" not in serialized.casefold()
+    assert "oauth" not in serialized.casefold()
+    assert "raw_response" not in serialized.casefold()

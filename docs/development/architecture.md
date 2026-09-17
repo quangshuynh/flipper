@@ -19,8 +19,9 @@ economics, evidence/risk, and dimension-preserving comparison. The legacy PC par
 adapt into that domain but retain their existing behavior. Deal analysis does not touch the
 inventory schema or realized-accounting services.
 
-Comparable research is also ephemeral. A bounded process-memory store keys records by a random
-browser cookie and source opportunity identity. Durable research would require an explicit research
-aggregate and migration rather than rows attached to transient Browse results. A future
-inventory-owned version could reference Q-numbers after acquisition, but must first define whether
-research is a historical snapshot or mutable current evidence.
+Working comparable research remains ephemeral. A bounded process-memory store keys records by a
+random browser cookie and source opportunity identity. An explicit save copies the evaluated
+aggregate into a schema-v11 durable research snapshot: queryable header fields plus a bounded,
+validated versioned JSON payload. Historical views use captured calculations and never depend on the
+working object or a live marketplace response. An optional inventory foreign key links history to a
+Q-number without making inventory depend on research or turning estimates into accounting facts.

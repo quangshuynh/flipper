@@ -7,8 +7,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from uuid import uuid4
 
-CURRENT_SCHEMA_VERSION = 10
+from deals.snapshots import canonical_snapshot_json, parse_snapshot_json, validate_snapshot_payload
+
+CURRENT_SCHEMA_VERSION = 11
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
@@ -76,6 +79,14 @@ class AttachmentNotFoundError(LookupError):
 
 class AttachmentValidationError(ValueError):
     """An attachment value is invalid."""
+
+
+class ResearchSnapshotNotFoundError(LookupError):
+    """No durable research snapshot has the requested identifier."""
+
+
+class ResearchSnapshotValidationError(ValueError):
+    """A durable research snapshot is invalid."""
 
 
 @dataclass(frozen=True)
@@ -213,6 +224,23 @@ class ValuationSnapshot:
     @property
     def estimated_gross_profit(self) -> Decimal:
         return self._amount(self.estimated_gross_profit_minor, self.estimated_gross_profit_scale)
+
+
+@dataclass(frozen=True)
+class ResearchSnapshotRecord:
+    internal_id: int
+    snapshot_id: str
+    saved_at: str
+    opportunity_identity: str
+    source: str
+    title: str
+    category: str
+    currency: str
+    asking_price: Decimal
+    expected_resale: Decimal | None
+    expected_profit: Decimal | None
+    inventory_id: str | None
+    payload: dict | None
 
 
 def parse_usd_cents(value: str | Decimal) -> int:
@@ -615,6 +643,45 @@ class InventoryStore:
                     WHERE marketplace = 'ebay' COLLATE NOCASE AND marketplace_item_id IS NOT NULL"""
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (10)")
+            if 11 not in versions:
+                connection.execute(
+                    """CREATE TABLE research_snapshots (
+                        internal_id INTEGER PRIMARY KEY,
+                        snapshot_id TEXT NOT NULL UNIQUE
+                            CHECK (length(snapshot_id) = 32 AND snapshot_id NOT GLOB '*[^0-9a-f]*'),
+                        saved_at TEXT NOT NULL
+                            CHECK (length(saved_at) = 20 AND substr(saved_at, 11, 1) = 'T'
+                                   AND substr(saved_at, -1) = 'Z'),
+                        opportunity_identity TEXT NOT NULL
+                            CHECK (length(trim(opportunity_identity)) BETWEEN 1 AND 500),
+                        source TEXT NOT NULL CHECK (length(trim(source)) BETWEEN 1 AND 100),
+                        title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 300),
+                        category TEXT NOT NULL CHECK (length(trim(category)) BETWEEN 1 AND 100),
+                        currency TEXT NOT NULL
+                            CHECK (length(currency) = 3 AND currency = upper(currency)),
+                        asking_price TEXT NOT NULL CHECK (length(asking_price) BETWEEN 1 AND 100),
+                        expected_resale TEXT CHECK (
+                            expected_resale IS NULL OR length(expected_resale) BETWEEN 1 AND 100),
+                        expected_profit TEXT CHECK (
+                            expected_profit IS NULL OR length(expected_profit) BETWEEN 1 AND 100),
+                        inventory_internal_id INTEGER,
+                        save_token TEXT NOT NULL UNIQUE
+                            CHECK (length(save_token) = 32 AND save_token NOT GLOB '*[^0-9a-f]*'),
+                        payload_json TEXT NOT NULL
+                            CHECK (length(payload_json) BETWEEN 2 AND 262144),
+                        FOREIGN KEY (inventory_internal_id) REFERENCES inventory_items(internal_id)
+                            ON DELETE SET NULL
+                    )"""
+                )
+                connection.execute(
+                    "CREATE INDEX research_snapshots_saved_at "
+                    "ON research_snapshots (saved_at DESC, internal_id DESC)"
+                )
+                connection.execute(
+                    "CREATE INDEX research_snapshots_inventory "
+                    "ON research_snapshots (inventory_internal_id)"
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (11)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -1968,6 +2035,171 @@ class InventoryStore:
                 "SELECT * FROM inventory_items ORDER BY internal_id"
             ).fetchall()
         return [self._record(row) for row in rows]
+
+    def save_research_snapshot(
+        self,
+        *,
+        opportunity_identity: str,
+        source: str,
+        title: str,
+        category: str,
+        currency: str,
+        asking_price: Decimal,
+        expected_resale: Decimal | None,
+        expected_profit: Decimal | None,
+        payload: dict,
+        save_token: str,
+    ) -> ResearchSnapshotRecord:
+        """Atomically persist one validated historical copy; retry tokens are idempotent."""
+        self.initialize()
+        if len(save_token) != 32 or any(char not in "0123456789abcdef" for char in save_token):
+            raise ResearchSnapshotValidationError("save token is invalid")
+        for value, name, limit in (
+            (opportunity_identity, "opportunity identity", 500),
+            (source, "source", 100),
+            (title, "title", 300),
+            (category, "category", 100),
+        ):
+            if not value.strip() or len(value) > limit:
+                raise ResearchSnapshotValidationError(f"research snapshot {name} is invalid")
+        currency = currency.strip().upper()
+        if len(currency) != 3 or not currency.isalpha():
+            raise ResearchSnapshotValidationError("research snapshot currency is invalid")
+        for amount, name in (
+            (asking_price, "asking price"),
+            (expected_resale, "expected resale"),
+            (expected_profit, "expected profit"),
+        ):
+            if amount is not None and (
+                not amount.is_finite() or (name != "expected profit" and amount < 0)
+            ):
+                raise ResearchSnapshotValidationError(f"research snapshot {name} is invalid")
+        try:
+            validate_snapshot_payload(payload)
+            payload_json = canonical_snapshot_json(payload)
+        except ValueError as exc:
+            raise ResearchSnapshotValidationError(str(exc)) from exc
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT research_snapshots.*, inventory_items.inventory_id "
+                "FROM research_snapshots LEFT JOIN inventory_items "
+                "ON inventory_items.internal_id = "
+                "research_snapshots.inventory_internal_id WHERE save_token = ?",
+                (save_token,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["opportunity_identity"] != opportunity_identity
+                    or existing["payload_json"] != payload_json
+                ):
+                    raise ResearchSnapshotValidationError(
+                        "save token was already used for different research"
+                    )
+                connection.commit()
+                return self._research_snapshot_record(existing)
+            snapshot_id = uuid4().hex
+            saved_at = self._utc_now()
+            connection.execute(
+                """INSERT INTO research_snapshots (
+                    snapshot_id, saved_at, opportunity_identity, source, title, category,
+                    currency, asking_price, expected_resale, expected_profit, save_token,
+                    payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    snapshot_id,
+                    saved_at,
+                    opportunity_identity,
+                    source,
+                    title,
+                    category,
+                    currency,
+                    str(asking_price),
+                    str(expected_resale) if expected_resale is not None else None,
+                    str(expected_profit) if expected_profit is not None else None,
+                    save_token,
+                    payload_json,
+                ),
+            )
+            row = connection.execute(
+                "SELECT research_snapshots.*, inventory_items.inventory_id "
+                "FROM research_snapshots LEFT JOIN inventory_items "
+                "ON inventory_items.internal_id = "
+                "research_snapshots.inventory_internal_id WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchone()
+            connection.commit()
+            return self._research_snapshot_record(row)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def get_research_snapshot(self, snapshot_id: str) -> ResearchSnapshotRecord:
+        self.initialize()
+        if len(snapshot_id) != 32 or any(c not in "0123456789abcdef" for c in snapshot_id):
+            raise ResearchSnapshotNotFoundError("research snapshot was not found")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT research_snapshots.*, inventory_items.inventory_id "
+                "FROM research_snapshots LEFT JOIN inventory_items "
+                "ON inventory_items.internal_id = "
+                "research_snapshots.inventory_internal_id WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchone()
+        if row is None:
+            raise ResearchSnapshotNotFoundError("research snapshot was not found")
+        return self._research_snapshot_record(row)
+
+    def list_research_snapshots(self) -> list[ResearchSnapshotRecord]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT research_snapshots.*, inventory_items.inventory_id "
+                "FROM research_snapshots LEFT JOIN inventory_items "
+                "ON inventory_items.internal_id = "
+                "research_snapshots.inventory_internal_id ORDER BY saved_at DESC, "
+                "research_snapshots.internal_id DESC"
+            ).fetchall()
+        return [self._research_snapshot_record(row, include_payload=False) for row in rows]
+
+    def link_research_snapshot(self, snapshot_id: str, inventory_id: str) -> ResearchSnapshotRecord:
+        snapshot = self.get_research_snapshot(snapshot_id)
+        item = self.get(inventory_id)
+        if snapshot.inventory_id and snapshot.inventory_id != item.inventory_id:
+            raise ResearchSnapshotValidationError("research snapshot is already linked")
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE research_snapshots SET inventory_internal_id = ? WHERE snapshot_id = ?",
+                (item.internal_id, snapshot.snapshot_id),
+            )
+        return self.get_research_snapshot(snapshot.snapshot_id)
+
+    @staticmethod
+    def _research_snapshot_record(
+        row: sqlite3.Row, *, include_payload: bool = True
+    ) -> ResearchSnapshotRecord:
+        return ResearchSnapshotRecord(
+            internal_id=row["internal_id"],
+            snapshot_id=row["snapshot_id"],
+            saved_at=row["saved_at"],
+            opportunity_identity=row["opportunity_identity"],
+            source=row["source"],
+            title=row["title"],
+            category=row["category"],
+            currency=row["currency"],
+            asking_price=Decimal(row["asking_price"]),
+            expected_resale=Decimal(row["expected_resale"])
+            if row["expected_resale"] is not None
+            else None,
+            expected_profit=Decimal(row["expected_profit"])
+            if row["expected_profit"] is not None
+            else None,
+            inventory_id=row["inventory_id"],
+            payload=parse_snapshot_json(row["payload_json"]) if include_payload else None,
+        )
 
     @staticmethod
     def _record(row: sqlite3.Row) -> InventoryRecord:

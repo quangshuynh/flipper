@@ -312,7 +312,7 @@ def test_v5_migration_preserves_manual_cost_and_adds_empty_external_identity(tmp
     with sqlite3.connect(store.path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,), (11,)]
 
 
 def test_v5_migration_rejects_unidentified_external_history(tmp_path):
@@ -335,7 +335,7 @@ def test_v5_migration_rejects_unidentified_external_history(tmp_path):
         assert connection.execute("SELECT source FROM sale_costs").fetchone() == ("ebay_finances",)
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (7,), (8,), (9,), (10,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (7,), (8,), (9,), (10,), (11,)]
 
 
 def test_import_cli_summary_and_finances_command_remains_read_only(monkeypatch, tmp_path, capsys):
