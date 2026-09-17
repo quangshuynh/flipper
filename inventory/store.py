@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
@@ -53,6 +53,10 @@ class SaleCostValidationError(ValueError):
 
 class SaleCostConflictError(SaleCostValidationError):
     """An external cost identity conflicts with persisted accounting data."""
+
+
+class ValuationValidationError(ValueError):
+    """A valuation snapshot is invalid."""
 
 
 @dataclass(frozen=True)
@@ -126,6 +130,55 @@ class SaleCostRecord:
     @property
     def amount(self) -> Decimal:
         return Decimal(self.amount_minor).scaleb(-self.amount_scale)
+
+
+@dataclass(frozen=True)
+class ValuationSnapshot:
+    """An immutable historical copy of analyzer outputs for one Q-number."""
+
+    internal_id: int
+    inventory_internal_id: int
+    inventory_id: str
+    analyzed_at: str
+    currency: str
+    estimated_market_value_minor: int
+    estimated_market_value_scale: int
+    expected_resale_value_minor: int
+    expected_resale_value_scale: int
+    asking_price_minor: int
+    asking_price_scale: int
+    ideal_buy_price_minor: int
+    ideal_buy_price_scale: int
+    estimated_gross_profit_minor: int
+    estimated_gross_profit_scale: int
+    estimated_roi: Decimal | None
+    deal_score: int
+    pricing_method: str | None
+    is_baseline: bool
+
+    @staticmethod
+    def _amount(minor: int, scale: int) -> Decimal:
+        return Decimal(minor).scaleb(-scale)
+
+    @property
+    def estimated_market_value(self) -> Decimal:
+        return self._amount(self.estimated_market_value_minor, self.estimated_market_value_scale)
+
+    @property
+    def expected_resale_value(self) -> Decimal:
+        return self._amount(self.expected_resale_value_minor, self.expected_resale_value_scale)
+
+    @property
+    def asking_price(self) -> Decimal:
+        return self._amount(self.asking_price_minor, self.asking_price_scale)
+
+    @property
+    def ideal_buy_price(self) -> Decimal:
+        return self._amount(self.ideal_buy_price_minor, self.ideal_buy_price_scale)
+
+    @property
+    def estimated_gross_profit(self) -> Decimal:
+        return self._amount(self.estimated_gross_profit_minor, self.estimated_gross_profit_scale)
 
 
 def parse_usd_cents(value: str | Decimal) -> int:
@@ -424,6 +477,64 @@ class InventoryStore:
                     )"""
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (7)")
+            if 8 not in versions:
+                connection.execute(
+                    """CREATE TABLE valuation_snapshots (
+                        internal_id INTEGER PRIMARY KEY,
+                        inventory_internal_id INTEGER NOT NULL,
+                        analyzed_at TEXT NOT NULL
+                            CHECK (length(analyzed_at) = 20 AND substr(analyzed_at, 11, 1) = 'T'
+                                   AND substr(analyzed_at, -1) = 'Z'),
+                        currency TEXT NOT NULL
+                            CHECK (length(currency) = 3 AND currency = upper(currency)),
+                        estimated_market_value_minor INTEGER NOT NULL
+                            CHECK (estimated_market_value_minor >= 0),
+                        estimated_market_value_scale INTEGER NOT NULL
+                            CHECK (estimated_market_value_scale BETWEEN 0 AND 9),
+                        expected_resale_value_minor INTEGER NOT NULL
+                            CHECK (expected_resale_value_minor >= 0),
+                        expected_resale_value_scale INTEGER NOT NULL
+                            CHECK (expected_resale_value_scale BETWEEN 0 AND 9),
+                        asking_price_minor INTEGER NOT NULL CHECK (asking_price_minor >= 0),
+                        asking_price_scale INTEGER NOT NULL
+                            CHECK (asking_price_scale BETWEEN 0 AND 9),
+                        ideal_buy_price_minor INTEGER NOT NULL CHECK (ideal_buy_price_minor >= 0),
+                        ideal_buy_price_scale INTEGER NOT NULL
+                            CHECK (ideal_buy_price_scale BETWEEN 0 AND 9),
+                        estimated_gross_profit_minor INTEGER NOT NULL,
+                        estimated_gross_profit_scale INTEGER NOT NULL
+                            CHECK (estimated_gross_profit_scale BETWEEN 0 AND 9),
+                        estimated_roi TEXT,
+                        deal_score INTEGER NOT NULL,
+                        pricing_method TEXT,
+                        is_baseline INTEGER NOT NULL CHECK (is_baseline IN (0, 1)),
+                        FOREIGN KEY (inventory_internal_id) REFERENCES inventory_items(internal_id)
+                            ON DELETE RESTRICT
+                    )"""
+                )
+                connection.execute(
+                    "CREATE INDEX valuation_snapshots_inventory "
+                    "ON valuation_snapshots (inventory_internal_id, internal_id)"
+                )
+                connection.execute(
+                    "CREATE UNIQUE INDEX valuation_snapshots_one_baseline "
+                    "ON valuation_snapshots (inventory_internal_id) WHERE is_baseline = 1"
+                )
+                connection.execute(
+                    """CREATE TRIGGER valuation_snapshots_immutable_update
+                    BEFORE UPDATE ON valuation_snapshots
+                    BEGIN
+                        SELECT RAISE(ABORT, 'valuation snapshots are immutable');
+                    END"""
+                )
+                connection.execute(
+                    """CREATE TRIGGER valuation_snapshots_immutable_delete
+                    BEFORE DELETE ON valuation_snapshots
+                    BEGIN
+                        SELECT RAISE(ABORT, 'valuation snapshots are immutable');
+                    END"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (8)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -1182,12 +1293,144 @@ class InventoryStore:
                 "DELETE FROM sale_costs WHERE internal_id = ?", (row["internal_id"],)
             )
             connection.commit()
-            return record
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
+        return record
+
+    @staticmethod
+    def _valuation_amount(value: Decimal, name: str, *, nonnegative: bool) -> tuple[int, int]:
+        if not isinstance(value, Decimal) or not value.is_finite():
+            raise ValuationValidationError(f"{name} must be a finite decimal")
+        if nonnegative and value < 0:
+            raise ValuationValidationError(f"{name} must be nonnegative")
+        normalized = value.normalize()
+        scale = max(0, -normalized.as_tuple().exponent)
+        if scale > 9:
+            raise ValuationValidationError(f"{name} has unsupported precision")
+        return int(normalized.scaleb(scale)), scale
+
+    def add_valuation_snapshot(
+        self,
+        inventory_id: str,
+        *,
+        analyzed_at: datetime,
+        currency: str,
+        estimated_market_value: Decimal,
+        expected_resale_value: Decimal,
+        asking_price: Decimal,
+        ideal_buy_price: Decimal,
+        estimated_gross_profit: Decimal,
+        estimated_roi: Decimal | None,
+        deal_score: int,
+        pricing_method: str | None = None,
+    ) -> ValuationSnapshot:
+        """Append an immutable snapshot; the first snapshot is the baseline."""
+        try:
+            timestamp = self._timestamp(analyzed_at, "analysis timestamp")
+        except SaleImportError as exc:
+            raise ValuationValidationError(str(exc)) from exc
+        currency = self._required(currency, "currency").upper()
+        if len(currency) != 3 or not currency.isalpha():
+            raise ValuationValidationError("currency must be a three-letter code")
+        if isinstance(deal_score, bool) or not isinstance(deal_score, int):
+            raise ValuationValidationError("deal score must be an integer")
+        if estimated_roi is not None and (
+            not isinstance(estimated_roi, Decimal) or not estimated_roi.is_finite()
+        ):
+            raise ValuationValidationError("estimated ROI must be a finite decimal")
+        method = self._optional(pricing_method)
+        values = []
+        for value, name, nonnegative in (
+            (estimated_market_value, "estimated market value", True),
+            (expected_resale_value, "expected resale value", True),
+            (asking_price, "asking price", True),
+            (ideal_buy_price, "ideal buy price", True),
+            (estimated_gross_profit, "estimated gross profit", False),
+        ):
+            values.extend(self._valuation_amount(value, name, nonnegative=nonnegative))
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            item = connection.execute(
+                "SELECT internal_id FROM inventory_items WHERE inventory_id = ?",
+                (inventory_id.upper(),),
+            ).fetchone()
+            if item is None:
+                raise InventoryNotFoundError(f"inventory item {inventory_id} was not found")
+            has_snapshot = connection.execute(
+                "SELECT 1 FROM valuation_snapshots WHERE inventory_internal_id = ? LIMIT 1",
+                (item["internal_id"],),
+            ).fetchone()
+            cursor = connection.execute(
+                """INSERT INTO valuation_snapshots (
+                    inventory_internal_id, analyzed_at, currency,
+                    estimated_market_value_minor, estimated_market_value_scale,
+                    expected_resale_value_minor, expected_resale_value_scale,
+                    asking_price_minor, asking_price_scale,
+                    ideal_buy_price_minor, ideal_buy_price_scale,
+                    estimated_gross_profit_minor, estimated_gross_profit_scale,
+                    estimated_roi, deal_score, pricing_method, is_baseline
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    item["internal_id"],
+                    timestamp,
+                    currency,
+                    *values,
+                    str(estimated_roi) if estimated_roi is not None else None,
+                    deal_score,
+                    method,
+                    int(has_snapshot is None),
+                ),
+            )
+            snapshot_id = cursor.lastrowid
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        assert snapshot_id is not None
+        return self.get_valuation_snapshot(snapshot_id)
+
+    def get_valuation_snapshot(self, snapshot_id: int) -> ValuationSnapshot:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT valuation_snapshots.*, inventory_items.inventory_id
+                FROM valuation_snapshots JOIN inventory_items
+                  ON inventory_items.internal_id = valuation_snapshots.inventory_internal_id
+                WHERE valuation_snapshots.internal_id = ?""",
+                (snapshot_id,),
+            ).fetchone()
+        if row is None:
+            raise ValuationValidationError("valuation snapshot was not found")
+        return self._valuation_record(row)
+
+    def list_valuation_snapshots(self, inventory_id: str | None = None) -> list[ValuationSnapshot]:
+        self.initialize()
+        parameters: tuple[object, ...] = ()
+        where = ""
+        if inventory_id is not None:
+            item = self.get(inventory_id)
+            where = "WHERE valuation_snapshots.inventory_internal_id = ?"
+            parameters = (item.internal_id,)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT valuation_snapshots.*, inventory_items.inventory_id
+                FROM valuation_snapshots JOIN inventory_items
+                  ON inventory_items.internal_id = valuation_snapshots.inventory_internal_id
+                {where} ORDER BY valuation_snapshots.internal_id""",
+                parameters,
+            ).fetchall()
+        return [self._valuation_record(row) for row in rows]
+
+    def baseline_valuation(self, inventory_id: str) -> ValuationSnapshot | None:
+        snapshots = self.list_valuation_snapshots(inventory_id)
+        return next((snapshot for snapshot in snapshots if snapshot.is_baseline), None)
 
     @staticmethod
     def _sale_cost_record(row: sqlite3.Row) -> SaleCostRecord:
@@ -1207,6 +1450,30 @@ class InventoryStore:
             external_component_key=row["external_component_key"],
             note=row["note"],
             created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _valuation_record(row: sqlite3.Row) -> ValuationSnapshot:
+        return ValuationSnapshot(
+            internal_id=row["internal_id"],
+            inventory_internal_id=row["inventory_internal_id"],
+            inventory_id=row["inventory_id"],
+            analyzed_at=row["analyzed_at"],
+            currency=row["currency"],
+            estimated_market_value_minor=row["estimated_market_value_minor"],
+            estimated_market_value_scale=row["estimated_market_value_scale"],
+            expected_resale_value_minor=row["expected_resale_value_minor"],
+            expected_resale_value_scale=row["expected_resale_value_scale"],
+            asking_price_minor=row["asking_price_minor"],
+            asking_price_scale=row["asking_price_scale"],
+            ideal_buy_price_minor=row["ideal_buy_price_minor"],
+            ideal_buy_price_scale=row["ideal_buy_price_scale"],
+            estimated_gross_profit_minor=row["estimated_gross_profit_minor"],
+            estimated_gross_profit_scale=row["estimated_gross_profit_scale"],
+            estimated_roi=(Decimal(row["estimated_roi"]) if row["estimated_roi"] else None),
+            deal_score=row["deal_score"],
+            pricing_method=row["pricing_method"],
+            is_baseline=bool(row["is_baseline"]),
         )
 
     @staticmethod

@@ -21,7 +21,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ebay.compliance import app
 from inventory.store import InventoryNotFoundError, InventoryStore, SaleNotFoundError
-from reports.service import build_summary_report, inventory_report, sales_report
+from reports.service import (
+    build_summary_report,
+    inventory_report,
+    sales_report,
+    valuation_accuracy_report,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATABASE = ROOT / "data" / "flipper_inventory.db"
@@ -197,6 +202,15 @@ def inventory_detail(request: Request, inventory_id: str):
         title=record.inventory_id,
         row=row,
         sale_row=sale_row,
+        valuation=store.baseline_valuation(record.inventory_id),
+        valuation_comparison=next(
+            (
+                result
+                for result in valuation_accuracy_report(store).rows
+                if result.inventory.internal_id == record.internal_id
+            ),
+            None,
+        ),
     )
 
 
@@ -226,6 +240,14 @@ def sale_detail(request: Request, sale_id: str):
         raise HTTPException(status_code=404, detail="Sale not found") from exc
     costs = store.list_sale_costs(sale.sale_id)
     report = sales_report([item], [sale], costs, store.list_reconciliation_confirmations())
+    valuation_row = next(
+        (
+            result
+            for result in valuation_accuracy_report(store).rows
+            if result.inventory.internal_id == item.internal_id
+        ),
+        None,
+    )
     return _render(
         request,
         "sale_detail.html",
@@ -233,12 +255,15 @@ def sale_detail(request: Request, sale_id: str):
         title=sale.sale_id,
         row=report.rows[0],
         costs=costs,
+        valuation_row=valuation_row,
     )
 
 
 @app.get("/analytics", response_class=HTMLResponse)
 def analytics_page(request: Request):
-    inventory, sales = _load_reports(_store())
+    store = _store()
+    inventory, sales = _load_reports(store)
+    valuations = valuation_accuracy_report(store)
     sales_by_month: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
     profit_by_month: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
     for row in sales.rows:
@@ -255,6 +280,7 @@ def analytics_page(request: Request):
         sales=sales,
         sales_by_month={key: dict(value) for key, value in sorted(sales_by_month.items())},
         profit_by_month={key: dict(value) for key, value in sorted(profit_by_month.items())},
+        valuations=valuations,
     )
 
 

@@ -36,13 +36,19 @@ from inventory.store import (
     SaleNotFoundError,
     SaleCostNotFoundError,
     SaleCostValidationError,
+    ValuationValidationError,
 )
 from models import DealEvaluation
 from parser.ai_enricher import enrich_specs_with_ai
 from notifier.discord_notifier import send_deal_to_discord
 from parser.extractor import extract_specs
 from pricing.estimator import calculate_pricing_result, estimate_market_value, score_deal
-from reports.service import build_summary_report, inventory_report, sales_report
+from reports.service import (
+    build_summary_report,
+    inventory_report,
+    sales_report,
+    valuation_accuracy_report,
+)
 from sales.economics import EconomicComponent, calculate_sale_economics
 from utils.dedupe import init_db, has_seen, mark_seen
 from utils.distance import compute_distance_miles
@@ -443,6 +449,24 @@ def build_parser() -> argparse.ArgumentParser:
     status = inventory_commands.add_parser("status", help="transition inventory lifecycle status")
     status.add_argument("inventory_id")
     status.add_argument("status", choices=VALID_STATUSES)
+    valuation = inventory_commands.add_parser(
+        "valuation", help="show immutable valuation snapshots for one inventory item"
+    )
+    valuation.add_argument("inventory_id")
+    attach_valuation = inventory_commands.add_parser(
+        "attach-valuation", help="attach exact typed analyzer outputs to a Q-number"
+    )
+    attach_valuation.add_argument("inventory_id")
+    attach_valuation.add_argument("--analyzed-at", type=_parse_date)
+    attach_valuation.add_argument("--currency", default="USD")
+    attach_valuation.add_argument("--market-value", type=Decimal, required=True)
+    attach_valuation.add_argument("--estimated-resale", type=Decimal, required=True)
+    attach_valuation.add_argument("--asking-price", type=Decimal, required=True)
+    attach_valuation.add_argument("--ideal-buy-price", type=Decimal, required=True)
+    attach_valuation.add_argument("--estimated-profit", type=Decimal, required=True)
+    attach_valuation.add_argument("--estimated-roi", type=Decimal)
+    attach_valuation.add_argument("--deal-score", type=int, required=True)
+    attach_valuation.add_argument("--pricing-method", default="component-estimator")
     sales = commands.add_parser("sales", help="inspect imported local sales")
     sales.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     sales_commands = sales.add_subparsers(dest="sales_command", required=True)
@@ -485,6 +509,7 @@ def build_parser() -> argparse.ArgumentParser:
         report.add_argument(
             "--to", dest="end", type=_parse_date, help="inclusive date (YYYY-MM-DD)"
         )
+    report_commands.add_parser("valuation", help="show baseline estimate accuracy")
     return parser
 
 
@@ -548,6 +573,41 @@ def run_inventory_command(args: argparse.Namespace) -> int:
             print(f"Inventory item {record.inventory_id}: {record.status}")
             return 0
 
+        if args.inventory_command == "attach-valuation":
+            snapshot = store.add_valuation_snapshot(
+                args.inventory_id,
+                analyzed_at=args.analyzed_at or _utc_now(),
+                currency=args.currency,
+                estimated_market_value=args.market_value,
+                expected_resale_value=args.estimated_resale,
+                asking_price=args.asking_price,
+                ideal_buy_price=args.ideal_buy_price,
+                estimated_gross_profit=args.estimated_profit,
+                estimated_roi=args.estimated_roi,
+                deal_score=args.deal_score,
+                pricing_method=args.pricing_method,
+            )
+            kind = "baseline" if snapshot.is_baseline else "additional"
+            print(f"Attached {kind} valuation to {snapshot.inventory_id}")
+            return 0
+
+        if args.inventory_command == "valuation":
+            snapshots = store.list_valuation_snapshots(args.inventory_id)
+            if not snapshots:
+                print(f"No valuation snapshots found for {args.inventory_id.upper()}.")
+                return 0
+            for snapshot in snapshots:
+                label = "baseline" if snapshot.is_baseline else "additional"
+                print(f"{snapshot.inventory_id} | {label} | {snapshot.analyzed_at}")
+                resale = _report_money(snapshot.currency, snapshot.expected_resale_value)
+                profit = _report_money(snapshot.currency, snapshot.estimated_gross_profit)
+                print(
+                    f"  estimated resale: {resale} | estimated gross profit: {profit} | "
+                    f"deal score: {snapshot.deal_score}"
+                )
+                print(f"  pricing method: {snapshot.pricing_method or 'unavailable'}")
+            return 0
+
         record = store.get(args.inventory_id)
         print(f"{record.inventory_id}: {record.title}")
         print("Acquisition")
@@ -564,7 +624,13 @@ def run_inventory_command(args: argparse.Namespace) -> int:
         print(f"  Listing/item ID: {record.marketplace_item_id or 'none'}")
         print(f"  SKU/custom label: {record.marketplace_sku or 'none'}")
         return 0
-    except (InventoryValidationError, InventoryNotFoundError, RuntimeError, sqlite3.Error) as exc:
+    except (
+        InventoryValidationError,
+        InventoryNotFoundError,
+        ValuationValidationError,
+        RuntimeError,
+        sqlite3.Error,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -886,10 +952,54 @@ def _print_summary_report(report, *, start, end) -> None:
     print(f"  Median days held: {_report_decimal(sales.median_days_held)}")
 
 
+def _print_valuation_report(report) -> None:
+    print("Valuation Accuracy Report")
+    if not report.rows:
+        print("No baseline valuation snapshots found.")
+    for row in report.rows:
+        comparison = row.comparison
+        if comparison is None:
+            reason = "unsold" if row.sale is None else "currency mismatch"
+            print(f"{row.inventory.inventory_id} | comparison unavailable ({reason})")
+            continue
+        print(
+            f"{row.inventory.inventory_id} | estimated resale: "
+            f"{_report_money(comparison.currency, comparison.estimated_resale)} | actual gross: "
+            f"{_report_money(comparison.currency, comparison.actual_gross)} | resale error: "
+            f"{_report_money(comparison.currency, comparison.resale_error)}"
+        )
+        if comparison.fully_reconciled_actual_profit is not None:
+            reconciled_profit = _report_money(
+                comparison.currency, comparison.fully_reconciled_actual_profit
+            )
+            print(
+                f"  fully reconciled actual profit: {reconciled_profit} | "
+                f"profit error: {_report_money(comparison.currency, comparison.profit_error)}"
+            )
+        elif comparison.recorded_actual_profit is not None:
+            print(
+                "  recorded actual profit (incomplete): "
+                f"{_report_money(comparison.currency, comparison.recorded_actual_profit)} | "
+                "profit error: unavailable until fully reconciled"
+            )
+    print(f"Comparable sales: {report.comparable_count}")
+    print(
+        "Average absolute resale error: "
+        + (
+            _report_money(report.aggregate_currency, report.average_absolute_resale_error)
+            if report.average_absolute_resale_error is not None
+            else "unavailable"
+        )
+    )
+
+
 def run_reports_command(args: argparse.Namespace) -> int:
     try:
-        start, end = _report_date_range(args)
         store = InventoryStore(args.database)
+        if args.report_command == "valuation":
+            _print_valuation_report(valuation_accuracy_report(store))
+            return 0
+        start, end = _report_date_range(args)
         today = _utc_now().date()
         if args.report_command == "summary":
             report = build_summary_report(store, today=today, start=start, end=end)
