@@ -24,9 +24,9 @@ from ebay.finance_transactions import FinanceTransaction
 from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
 from ebay.listing_reconciliation import (
     ListingReconciliationState,
-    reconcile_active_listings,
     summarize as summarize_listings,
 )
+from ebay.listing_workflow import import_listing, reconcile_listings, sync_listings
 from ebay.finances import FinancesApiError, FinancesClient
 from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
 from ebay.orders import EbayOrder, Money
@@ -758,7 +758,7 @@ def run_ebay_command(args: argparse.Namespace) -> int:
         if args.ebay_command in {"listings", "sync-listings", "import-listing"}:
             listings = ActiveListingsClient(oauth).get_active_listings()
             store = InventoryStore(args.database)
-            results = reconcile_active_listings(listings, store.list())
+            results = reconcile_listings(store, listings)
             if args.ebay_command == "listings":
                 print("SKU | Item ID | Price | Qty | State | Title")
                 for result in results:
@@ -784,41 +784,25 @@ def run_ebay_command(args: argparse.Namespace) -> int:
                 )
                 return 0
             if args.ebay_command == "sync-listings":
-                changed = 0
-                for result in results:
-                    if result.state is ListingReconciliationState.MATCHED and result.inventory:
-                        _, did_change = store.sync_ebay_listing(
-                            result.inventory.inventory_id,
-                            marketplace_item_id=result.listing.item_id,
-                            marketplace_sku=result.listing.sku,
-                        )
-                        changed += int(did_change)
-                conflicts = sum(
-                    result.state is ListingReconciliationState.CONFLICT for result in results
-                )
+                summary = sync_listings(store, results)
                 print(
-                    f"Synchronized {changed} local item(s); {conflicts} conflict(s) require "
+                    f"Synchronized {summary.updated} local item(s); "
+                    f"{summary.conflicts} conflict(s) require "
                     "review; eBay was not modified."
                 )
                 return 0
             sku = args.sku.strip()
             matches = [result for result in results if result.listing.sku == sku]
-            if len(matches) != 1 or matches[0].state not in {
-                ListingReconciliationState.MISSING_LOCAL,
-                ListingReconciliationState.MATCHED,
-            }:
+            if len(matches) != 1:
                 raise ValueError("listing cannot be imported safely; inspect 'ebay listings'")
-            result = matches[0]
-            listing = result.listing
-            record, created = store.adopt_ebay_listing(
-                sku,
-                title=listing.title,
+            record, created = import_listing(
+                store,
+                results,
+                item_id=matches[0].listing.item_id,
+                sku=sku,
                 source=args.source,
                 acquired_at=args.acquired_at,
                 acquisition_cost=args.cost,
-                marketplace_item_id=listing.item_id,
-                marketplace_sku=sku,
-                quantity=1,
             )
             print(
                 f"{'Imported' if created else 'Already imported'} {record.inventory_id}; "

@@ -44,8 +44,8 @@ The web application has no JavaScript build step. FastAPI renders Jinja template
 local CSS asset, which keeps a single Python backend and prevents browser code from accessing
 SQLite or duplicating accounting formulas. Pages include:
 
-- **Dashboard:** active inventory, tied-up capital, gross sales, recorded and fully reconciled
-  profit, recorded margin, reconciliation attention, and recent activity.
+- **Dashboard:** active inventory, tied-up capital, currency-separated sales economics, a
+  deterministic local attention queue, and recent activity. It never contacts eBay.
 - **Inventory:** searchable/filterable/sortable durable records with lifecycle, aging, marketplace
   linkage, linked sales, and detail views.
 - **Sales:** sale-level economics, reconciliation state, missing confirmations, component
@@ -53,7 +53,9 @@ SQLite or duplicating accounting formulas. Pages include:
 - **Analytics:** currency-separated sales and profit over time, inventory/reconciliation
   distributions, and defensible holding-period summaries.
 - **Analyze:** guidance for the supported local analysis and explicit acquisition workflow.
-- **Integrations / Settings:** safe eBay environment, configuration, and connection status plus
+- **eBay Listings:** live read-only active-listing discovery, explicit safe local synchronization,
+  and explicit missing-local Q-number import using user-entered acquisition facts.
+- **Settings:** safe eBay environment, configuration, and connection status plus
   secure CLI connection actions.
 
 For web development, run the same project checks used by CI:
@@ -70,8 +72,13 @@ payloads, OAuth tokens, secrets, or credential-store values. The existing eBay d
 remains available at `/api/ebay/account-deletion` on `web.app:app`, while the production-compatible
 `ebay.compliance:app` entry point remains unchanged.
 
-Browser mutations, browser-based OAuth, full analyzer forms, historical sell-through, currency
-conversion, payout reconciliation, and background marketplace sync are intentionally deferred.
+Opening `/ebay/listings` performs a live read-only eBay retrieval. Synchronization and import occur
+only after an explicit POST action and use the same services as the CLI. Flipper never modifies an
+eBay listing, does not infer sold state when a listing disappears, and never substitutes asking
+price or listing date for acquisition cost or date. Browser-based OAuth, attachment mutation, full
+analyzer forms, historical sell-through, currency conversion, payout reconciliation, and
+background marketplace sync remain intentionally deferred. Attachment viewing stays available on
+inventory detail pages; add/remove continues through the invariant-preserving CLI service.
 
 ## Pricing
 

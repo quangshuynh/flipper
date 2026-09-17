@@ -1,33 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
+{% if message %}<p class="notice" role="status">{{ message }}</p>{% endif %}
+{% if error_message %}<p class="notice error" role="alert">{{ error_message }}</p>{% endif %}
 {% if error %}
-<section class="card"><h2>Listings unavailable</h2><p>{{ error }}</p></section>
+<section class="panel"><h2>Listings unavailable</h2><p>{{ error }}</p><p>Your local inventory remains available from the navigation.</p></section>
 {% else %}
-<section class="card">
-  <p>Live, read-only eBay data. Exact Custom Label/SKU linkage only.</p>
-  <p><strong>{{ results|length }}</strong> total ·
-    {{ summary.get('MATCHED', 0) }} matched ·
-    {{ summary.get('MISSING_LOCAL', 0) }} missing local ·
-    {{ summary.get('MISSING_SKU', 0) }} missing SKU ·
-    {{ summary.get('INVALID_SKU', 0) }} invalid SKU ·
-    {{ summary.get('CONFLICT', 0) }} conflicts</p>
+<section class="panel">
+  <div class="panel-head"><div><p>Live, read-only eBay data. Exact Custom Label/SKU linkage only.</p></div><form method="post" action="/ebay/listings/sync"><button type="submit">Synchronize safe local state</button></form></div>
+  <p class="muted">Opening or refreshing this page retrieves current listings. Synchronization changes Flipper only; it never changes eBay.</p>
+  <p><strong>{{ results|length }}</strong> total · {{ summary.get('MATCHED', 0) }} matched · {{ summary.get('MISSING_LOCAL', 0) }} missing local · {{ summary.get('MISSING_SKU', 0) }} missing SKU · {{ summary.get('INVALID_SKU', 0) }} invalid SKU · {{ summary.get('CONFLICT', 0) }} conflicts</p>
 </section>
-<section class="card table-wrap">
-  <table>
-    <thead><tr><th>Title</th><th>SKU</th><th>Item ID</th><th>Price</th><th>Qty</th><th>State</th><th>Local</th></tr></thead>
-    <tbody>
-    {% for result in results %}
-      <tr>
-        <td>{% if result.listing.listing_url %}<a href="{{ result.listing.listing_url }}" rel="noreferrer">{{ result.listing.title }}</a>{% else %}{{ result.listing.title }}{% endif %}</td>
-        <td>{{ result.listing.sku or '—' }}</td><td>{{ result.listing.item_id }}</td>
-        <td>{% if result.listing.asking_price %}{{ result.listing.asking_price.value|money(result.listing.asking_price.currency) }}{% else %}Unavailable{% endif %}</td>
-        <td>{{ result.listing.quantity_available if result.listing.quantity_available is not none else '—' }}</td>
-        <td><strong>{{ result.state.value.replace('_', ' ') }}</strong></td>
-        <td>{% if result.inventory %}<a href="/inventory/{{ result.inventory.inventory_id }}">{{ result.inventory.inventory_id }}</a>{% else %}—{% endif %}</td>
-      </tr>
-    {% else %}<tr><td colspan="7">No active listings found.</td></tr>{% endfor %}
-    </tbody>
-  </table>
-</section>
+<section class="panel table-wrap"><table><thead><tr><th>Title</th><th>SKU</th><th>Item ID</th><th>Asking price</th><th>Qty</th><th>Reconciliation</th><th>Local action</th></tr></thead><tbody>
+{% for result in results %}<tr>
+  <td>{% if result.listing.listing_url %}<a href="{{ result.listing.listing_url }}" rel="noreferrer">{{ result.listing.title }}</a>{% else %}{{ result.listing.title }}{% endif %}</td><td>{{ result.listing.sku or '—' }}</td><td>{{ result.listing.item_id }}</td><td>{% if result.listing.asking_price %}{{ result.listing.asking_price.value|money(result.listing.asking_price.currency) }}{% else %}Unavailable{% endif %}</td><td>{{ result.listing.quantity_available if result.listing.quantity_available is not none else '—' }}</td>
+  <td><span class="badge {{ result.state.value|lower }}">{{ result.state.value.replace('_', ' ') }}</span><small>{% if result.state.value == 'MATCHED' %}Linked to {{ result.inventory.inventory_id }}{% elif result.state.value == 'MISSING_LOCAL' %}eBay uses {{ result.listing.sku }}, but it does not exist in Flipper.{% elif result.state.value == 'MISSING_SKU' %}This listing has no Flipper Q-number SKU.{% elif result.state.value == 'INVALID_SKU' %}The SKU is not a canonical Flipper Q-number.{% else %}Existing durable identifiers disagree. Review manually.{% endif %}</small></td>
+  <td>{% if result.inventory %}<a href="/inventory/{{ result.inventory.inventory_id }}">{{ result.inventory.inventory_id }}</a>{% elif result.state.value == 'MISSING_LOCAL' %}<details><summary>Import into Flipper</summary><p class="muted">eBay asking price: {% if result.listing.asking_price %}{{ result.listing.asking_price.value|money(result.listing.asking_price.currency) }}{% else %}Unavailable{% endif %}. Enter actual historical acquisition facts below.</p><form class="stacked-form" method="post" action="/ebay/listings/import"><input type="hidden" name="item_id" value="{{ result.listing.item_id }}"><input type="hidden" name="sku" value="{{ result.listing.sku }}"><label>Acquisition source<input name="source" required maxlength="200"></label><label>Acquisition date<input type="date" name="acquired_at" required></label><label>Acquisition cost (USD)<input name="acquisition_cost" inputmode="decimal" required placeholder="0.00"></label><button type="submit">Import {{ result.listing.sku }}</button></form></details>{% else %}—{% endif %}</td>
+</tr>{% else %}<tr><td colspan="7">No active listings found.</td></tr>{% endfor %}
+</tbody></table></section>
 {% endif %}
 {% endblock %}

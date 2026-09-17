@@ -1843,6 +1843,16 @@ class InventoryStore:
             ).fetchall()
         return [self._attachment_record(row) for row in rows]
 
+    def attachment_counts(self) -> dict[int, int]:
+        """Return attachment counts for all inventory records in one bounded query."""
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT inventory_internal_id, COUNT(*) AS count "
+                "FROM inventory_attachments GROUP BY inventory_internal_id"
+            ).fetchall()
+        return {row["inventory_internal_id"]: row["count"] for row in rows}
+
     def remove_attachment_metadata(self, inventory_id: str, attachment_id: str) -> AttachmentRecord:
         """Delete metadata only after the attachment service has secured the file."""
         record = self.get_attachment(attachment_id, inventory_id=inventory_id)
