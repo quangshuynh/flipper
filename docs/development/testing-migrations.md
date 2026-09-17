@@ -18,5 +18,9 @@ Schema v11 adds durable research snapshots. It preserves existing rows, creates 
 automatically, and stores bounded version-1 research payloads with authoritative UTC save times.
 Upgrade is automatic through the ordered transaction; downgrade is not supported.
 
+Schema v12 adds one optional actual sourcing-travel record per inventory item. It creates no facts
+for existing Q-numbers, preserves unknown separately from zero, stores exact scaled decimals, and
+restricts ownership to an explicit inventory foreign key.
+
 Tests should assert meaningful structure and behavior rather than decorative CSS values. Networked
 integrations are mocked unless an explicitly authorized, read-only production smoke is being run.

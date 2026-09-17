@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from deals.snapshots import canonical_snapshot_json, parse_snapshot_json, validate_snapshot_payload
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
@@ -87,6 +87,10 @@ class ResearchSnapshotNotFoundError(LookupError):
 
 class ResearchSnapshotValidationError(ValueError):
     """A durable research snapshot is invalid."""
+
+
+class SourcingTravelValidationError(ValueError):
+    """Actual sourcing travel facts are invalid."""
 
 
 @dataclass(frozen=True)
@@ -241,6 +245,31 @@ class ResearchSnapshotRecord:
     expected_profit: Decimal | None
     inventory_id: str | None
     payload: dict | None
+
+
+@dataclass(frozen=True)
+class SourcingTravelRecord:
+    """User-recorded actual sourcing-trip facts for one inventory item."""
+
+    inventory_internal_id: int
+    inventory_id: str
+    round_trip_miles: Decimal | None
+    fuel_cost: Decimal | None
+    additional_expense: Decimal | None
+    travel_minutes: int | None
+    note: str
+    updated_at: str
+
+    @property
+    def total_expense(self) -> Decimal | None:
+        if self.fuel_cost is None or self.additional_expense is None:
+            return None
+        return self.fuel_cost + self.additional_expense
+
+    @property
+    def recorded_expense(self) -> Decimal:
+        """Sum recorded expense facts for accounting; absent components add nothing."""
+        return (self.fuel_cost or Decimal(0)) + (self.additional_expense or Decimal(0))
 
 
 def parse_usd_cents(value: str | Decimal) -> int:
@@ -682,6 +711,40 @@ class InventoryStore:
                     "ON research_snapshots (inventory_internal_id)"
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (11)")
+            if 12 not in versions:
+                connection.execute(
+                    """CREATE TABLE sourcing_travel (
+                        inventory_internal_id INTEGER PRIMARY KEY,
+                        round_trip_miles_minor INTEGER,
+                        round_trip_miles_scale INTEGER,
+                        fuel_cost_minor INTEGER,
+                        fuel_cost_scale INTEGER,
+                        additional_expense_minor INTEGER,
+                        additional_expense_scale INTEGER,
+                        travel_minutes INTEGER CHECK (
+                            travel_minutes IS NULL OR travel_minutes >= 0),
+                        note TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 2000),
+                        updated_at TEXT NOT NULL CHECK (
+                            length(updated_at) = 20 AND substr(updated_at, 11, 1) = 'T'
+                            AND substr(updated_at, -1) = 'Z'),
+                        CHECK ((round_trip_miles_minor IS NULL) =
+                               (round_trip_miles_scale IS NULL)),
+                        CHECK (round_trip_miles_minor IS NULL OR
+                               (round_trip_miles_minor >= 0 AND
+                                round_trip_miles_scale BETWEEN 0 AND 9)),
+                        CHECK ((fuel_cost_minor IS NULL) = (fuel_cost_scale IS NULL)),
+                        CHECK (fuel_cost_minor IS NULL OR
+                               (fuel_cost_minor >= 0 AND fuel_cost_scale BETWEEN 0 AND 9)),
+                        CHECK ((additional_expense_minor IS NULL) =
+                               (additional_expense_scale IS NULL)),
+                        CHECK (additional_expense_minor IS NULL OR
+                               (additional_expense_minor >= 0 AND
+                                additional_expense_scale BETWEEN 0 AND 9)),
+                        FOREIGN KEY (inventory_internal_id) REFERENCES inventory_items(internal_id)
+                            ON DELETE RESTRICT
+                    )"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (12)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -2176,6 +2239,124 @@ class InventoryStore:
                 (item.internal_id, snapshot.snapshot_id),
             )
         return self.get_research_snapshot(snapshot.snapshot_id)
+
+    @staticmethod
+    def _travel_decimal(value: str | Decimal | None, name: str) -> tuple[int, int] | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            amount = Decimal(value)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise SourcingTravelValidationError(f"{name} must be a valid number") from exc
+        if not amount.is_finite() or amount < 0:
+            raise SourcingTravelValidationError(f"{name} must be nonnegative")
+        normalized = amount.normalize()
+        scale = max(0, -normalized.as_tuple().exponent)
+        if scale > 9:
+            raise SourcingTravelValidationError(f"{name} has unsupported precision")
+        return int(normalized.scaleb(scale)), scale
+
+    def set_sourcing_travel(
+        self,
+        inventory_id: str,
+        *,
+        round_trip_miles: str | Decimal | None = None,
+        fuel_cost: str | Decimal | None = None,
+        additional_expense: str | Decimal | None = None,
+        travel_minutes: str | int | None = None,
+        note: str = "",
+    ) -> SourcingTravelRecord:
+        """Create or replace the authoritative actual travel facts for a Q item."""
+        item = self.get(inventory_id)
+        miles = self._travel_decimal(round_trip_miles, "round-trip miles")
+        fuel = self._travel_decimal(fuel_cost, "fuel expense")
+        additional = self._travel_decimal(additional_expense, "additional travel expense")
+        minutes = None
+        if travel_minutes is not None and str(travel_minutes).strip():
+            try:
+                minutes = int(str(travel_minutes))
+            except ValueError as exc:
+                raise SourcingTravelValidationError(
+                    "travel minutes must be a whole number"
+                ) from exc
+            if minutes < 0 or str(minutes) != str(travel_minutes).strip():
+                raise SourcingTravelValidationError(
+                    "travel minutes must be a nonnegative whole number"
+                )
+        cleaned_note = note.strip()
+        if len(cleaned_note) > 2000:
+            raise SourcingTravelValidationError("travel note is too long")
+        if all(value is None for value in (miles, fuel, additional, minutes)) and not cleaned_note:
+            raise SourcingTravelValidationError("record at least one actual travel fact")
+        values = [part for pair in (miles, fuel, additional) for part in (pair or (None, None))]
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO sourcing_travel (
+                    inventory_internal_id, round_trip_miles_minor, round_trip_miles_scale,
+                    fuel_cost_minor, fuel_cost_scale, additional_expense_minor,
+                    additional_expense_scale, travel_minutes, note, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(inventory_internal_id) DO UPDATE SET
+                    round_trip_miles_minor=excluded.round_trip_miles_minor,
+                    round_trip_miles_scale=excluded.round_trip_miles_scale,
+                    fuel_cost_minor=excluded.fuel_cost_minor,
+                    fuel_cost_scale=excluded.fuel_cost_scale,
+                    additional_expense_minor=excluded.additional_expense_minor,
+                    additional_expense_scale=excluded.additional_expense_scale,
+                    travel_minutes=excluded.travel_minutes, note=excluded.note,
+                    updated_at=excluded.updated_at""",
+                (item.internal_id, *values, minutes, cleaned_note, self._utc_now()),
+            )
+        return self.get_sourcing_travel(item.inventory_id)  # type: ignore[return-value]
+
+    def get_sourcing_travel(self, inventory_id: str) -> SourcingTravelRecord | None:
+        item = self.get(inventory_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT sourcing_travel.*, inventory_items.inventory_id FROM sourcing_travel "
+                "JOIN inventory_items ON inventory_items.internal_id = "
+                "sourcing_travel.inventory_internal_id WHERE inventory_internal_id = ?",
+                (item.internal_id,),
+            ).fetchone()
+        return self._sourcing_travel_record(row) if row else None
+
+    def list_sourcing_travel(self) -> list[SourcingTravelRecord]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT sourcing_travel.*, inventory_items.inventory_id FROM sourcing_travel "
+                "JOIN inventory_items ON inventory_items.internal_id = "
+                "sourcing_travel.inventory_internal_id ORDER BY inventory_internal_id"
+            ).fetchall()
+        return [self._sourcing_travel_record(row) for row in rows]
+
+    def clear_sourcing_travel(self, inventory_id: str) -> SourcingTravelRecord:
+        record = self.get_sourcing_travel(inventory_id)
+        if record is None:
+            raise SourcingTravelValidationError("actual sourcing travel was not found")
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM sourcing_travel WHERE inventory_internal_id = ?",
+                (record.inventory_internal_id,),
+            )
+        return record
+
+    @staticmethod
+    def _sourcing_travel_record(row: sqlite3.Row) -> SourcingTravelRecord:
+        def amount(prefix: str) -> Decimal | None:
+            minor = row[f"{prefix}_minor"]
+            return None if minor is None else Decimal(minor).scaleb(-row[f"{prefix}_scale"])
+
+        return SourcingTravelRecord(
+            row["inventory_internal_id"],
+            row["inventory_id"],
+            amount("round_trip_miles"),
+            amount("fuel_cost"),
+            amount("additional_expense"),
+            row["travel_minutes"],
+            row["note"],
+            row["updated_at"],
+        )
 
     @staticmethod
     def _research_snapshot_record(

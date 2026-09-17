@@ -8,7 +8,9 @@ and supported credits/reversals. Manual components remain distinct from eBay Fin
 Amounts are exact and must use the sale currency. Acquisition cost is USD, so Flipper withholds a
 profit result for non-USD sales rather than converting currency.
 
-Recorded realized profit is derived from gross proceeds, acquisition cost, and recorded components.
+Recorded realized profit is derived from gross proceeds, acquisition cost, recorded actual sourcing
+fuel/additional travel expenses, and sale components. Actual sourcing travel is Q-linked acquisition-
+side accounting, not a sale/shipping component; each recorded expense is subtracted exactly once.
 It is not final merely because rows exist. Fees, shipping, refunds, and adjustments each require an
 explicit confirmation; the sale is incomplete, partially reconciled, or fully reconciled based on
 those confirmations. Payout-to-bank reconciliation and complete accounting remain out of scope.
