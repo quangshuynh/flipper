@@ -44,6 +44,7 @@ nav:
       - Sales & accounting: guides/sales-accounting.md
       - Reconciliation: concepts/reconciliation.md
       - Reports & dashboard: guides/reports-dashboard.md
+      - Historical insights: guides/historical-insights.md
   - Reference:
       - CLI: reference/cli.md
       - Configuration: reference/configuration.md
