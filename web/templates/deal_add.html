@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel"><p class="eyebrow">User-provided source facts</p><h2>Add an opportunity from anywhere</h2><p>This creates temporary research state in this browser. Flipper does not fetch, scrape, or verify a pasted URL.</p></section>
+{% if values.error_message %}<p class="notice error">{{ values.error_message }}</p>{% endif %}
+<form class="stacked-form panel" method="post" action="/deals/opportunities">
+<label>Source<select name="source" required>{% for source in sources %}<option value="{{ source.value }}">{{ source.value|replace('-', ' ')|title }}</option>{% endfor %}</select></label>
+<label>Title<input name="title" required maxlength="300"></label>
+<label>Category<select name="category" required>{% for category in categories %}<option value="{{ category.slug }}">{{ category.label }}</option>{% endfor %}</select></label>
+<label>Asking / base price<input name="base_price" required inputmode="decimal"></label><label>Currency<input name="currency" value="USD" required minlength="3" maxlength="3"></label>
+<label>Inbound shipping <span class="muted">(blank means unknown)</span><input name="inbound_shipping" inputmode="decimal"></label>
+<label>Condition<select name="condition" required>{% for condition in conditions %}<option value="{{ condition }}">{{ condition|replace('_', ' ')|title }}</option>{% endfor %}</select></label>
+<label>Source URL <span class="muted">(HTTPS reference only)</span><input name="source_url" type="url" maxlength="2000" placeholder="https://..."></label>
+<label>Location / source location<input name="location_text" maxlength="200"></label>
+<label>Notes<textarea name="notes" maxlength="2000" rows="4"></textarea></label>
+<button type="submit">Add and evaluate</button>
+</form>
+{% endblock %}
