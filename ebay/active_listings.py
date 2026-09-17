@@ -50,7 +50,7 @@ class ActiveListingsClient:
         while True:
             token = self._oauth.access_token(force_refresh=retried_auth)
             headers = {
-                "Authorization": f"Bearer {token}",
+                "X-EBAY-API-IAF-TOKEN": token,
                 "Content-Type": "text/xml",
                 "X-EBAY-API-CALL-NAME": "GetMyeBaySelling",
                 "X-EBAY-API-COMPATIBILITY-LEVEL": TRADING_API_VERSION,
@@ -70,10 +70,13 @@ class ActiveListingsClient:
             if response.status_code == 401 and not retried_auth:
                 retried_auth = True
                 continue
-            if response.status_code == 403:
+            if response.status_code in {401, 403}:
+                detail = self._error_detail(response.content, secrets=(token,))
+                suffix = f": {detail}" if detail else ""
                 raise ActiveListingsApiError(
-                    "eBay denied active-listing access; reconnect with "
-                    "'python main.py ebay connect'"
+                    f"eBay active-listing token or scope was rejected "
+                    f"(HTTP {response.status_code}){suffix}; reconnect with "
+                    "'python main.py ebay connect' if authorization changed"
                 )
             if response.status_code == 429:
                 raise ActiveListingsApiError("eBay rate limit reached; try again later")
@@ -82,24 +85,72 @@ class ActiveListingsClient:
                     f"eBay listing service is temporarily unavailable (HTTP {response.status_code})"
                 )
             if response.status_code >= 400:
+                detail = self._error_detail(response.content, secrets=(token,))
+                suffix = f": {detail}" if detail else ""
                 raise ActiveListingsApiError(
-                    f"eBay active-listing retrieval failed (HTTP {response.status_code})"
+                    f"eBay active-listing transport rejection (HTTP {response.status_code}){suffix}"
                 )
-            parsed, total_pages = self._parse(response.content)
+            parsed, total_pages = self._parse(response.content, secrets=(token,))
             listings.extend(parsed)
             if page >= total_pages:
                 return listings
             page += 1
 
     @staticmethod
-    def _parse(payload: bytes) -> tuple[list[EbayActiveListing], int]:
+    def _safe_text(
+        element: ElementTree.Element | None, tag: str, secrets: tuple[str, ...] = ()
+    ) -> str | None:
+        if element is None:
+            return None
+        value = element.findtext(f"{{{NS}}}{tag}")
+        if value is None:
+            return None
+        cleaned = " ".join(value.split())
+        for secret in secrets:
+            if secret:
+                cleaned = cleaned.replace(secret, "[REDACTED]")
+        cleaned = cleaned[:500]
+        return cleaned or None
+
+    @classmethod
+    def _error_detail(cls, payload: bytes, *, secrets: tuple[str, ...] = ()) -> str:
+        """Extract only allowlisted Trading error fields, never the raw response."""
+        try:
+            root = ElementTree.fromstring(payload)
+        except (ElementTree.ParseError, TypeError):
+            return ""
+        fields = []
+        ack = cls._safe_text(root, "Ack", secrets)
+        if ack:
+            fields.append(f"ack={ack}")
+        for error in root.findall(f"{{{NS}}}Errors")[:3]:
+            for tag, label in (
+                ("ErrorCode", "errorCode"),
+                ("SeverityCode", "severity"),
+                ("ErrorClassification", "classification"),
+                ("ShortMessage", "shortMessage"),
+                ("LongMessage", "longMessage"),
+            ):
+                value = cls._safe_text(error, tag, secrets)
+                if value:
+                    fields.append(f"{label}={value}")
+        return "; ".join(fields)
+
+    @staticmethod
+    def _parse(
+        payload: bytes, *, secrets: tuple[str, ...] = ()
+    ) -> tuple[list[EbayActiveListing], int]:
         try:
             root = ElementTree.fromstring(payload)
         except ElementTree.ParseError as exc:
             raise ActiveListingsApiError("eBay returned malformed active-listing data") from exc
         ack = root.findtext(f"{{{NS}}}Ack")
         if ack not in {"Success", "Warning"}:
-            raise ActiveListingsApiError("eBay active-listing retrieval was rejected")
+            detail = ActiveListingsClient._error_detail(payload, secrets=secrets)
+            suffix = f": {detail}" if detail else ""
+            raise ActiveListingsApiError(
+                f"eBay Trading API rejected active-listing request{suffix}"
+            )
         active = root.find(f"{{{NS}}}ActiveList")
         if active is None:
             return [], 0
@@ -119,7 +170,8 @@ class ActiveListingsClient:
                 "item_id": find("ItemID"),
                 "sku": find("SKU"),
                 "title": find("Title"),
-                "status": find("SellingStatus/ListingStatus"),
+                # Membership in GetMyeBaySelling.ActiveList is the authoritative status.
+                "status": find("SellingStatus/ListingStatus") or "Active",
                 "price_value": price.text if price is not None else None,
                 "price_currency": price.get("currencyID") if price is not None else None,
                 "quantity_available": find("QuantityAvailable"),

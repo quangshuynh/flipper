@@ -61,8 +61,15 @@ def normalize_listing(raw: dict[str, Any]) -> EbayActiveListing:
     item_id = _text(raw.get("item_id"))
     title = _text(raw.get("title"))
     status = _text(raw.get("status"))
-    if not item_id or not title or not status:
-        raise ListingResponseError("eBay listing is missing a required field")
+    missing = [
+        name
+        for name, value in (("item ID", item_id), ("title", title), ("status", status))
+        if not value
+    ]
+    if missing:
+        raise ListingResponseError(
+            f"eBay listing is missing required field(s): {', '.join(missing)}"
+        )
     price = None
     if raw.get("price_value") is not None or raw.get("price_currency") is not None:
         currency = _text(raw.get("price_currency"))
