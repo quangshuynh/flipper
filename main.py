@@ -15,6 +15,9 @@ from dotenv import load_dotenv
 
 from acquisition import acquire_from_analysis, analyze_listing
 from collectors.json_feed_collector import DEFAULT_JSON_PATH, fetch_listings
+from deals.categories import normalize_category
+from deals.economics import calculate_economics
+from deals.models import CostComponent, Money as DealMoney, SourceIdentity, TimeToSale
 from ebay.finance_reconciliation import (
     FinanceMatchStatus,
     reconcile_finance_transactions,
@@ -376,6 +379,28 @@ def build_parser() -> argparse.ArgumentParser:
     acquire.add_argument("--source", help="actual acquisition source; defaults to listing source")
     acquire.add_argument("--notes", default="")
     acquire.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    deals = commands.add_parser("deals", help="analyze source-neutral deal economics")
+    deal_commands = deals.add_subparsers(dest="deals_command", required=True)
+    deal_analyze = deal_commands.add_parser(
+        "analyze", help="analyze one explicitly supplied synthetic or manual opportunity"
+    )
+    deal_analyze.add_argument("--title", required=True)
+    deal_analyze.add_argument(
+        "--source", choices=[source.value for source in SourceIdentity], required=True
+    )
+    deal_analyze.add_argument("--category", required=True)
+    deal_analyze.add_argument("--currency", default="USD")
+    deal_analyze.add_argument("--base-price", type=Decimal, required=True)
+    deal_analyze.add_argument("--tax", type=Decimal)
+    deal_analyze.add_argument("--inbound-shipping", type=Decimal)
+    deal_analyze.add_argument("--travel-cost", type=Decimal)
+    deal_analyze.add_argument("--other-acquisition-cost", type=Decimal)
+    deal_analyze.add_argument("--expected-resale", type=Decimal)
+    deal_analyze.add_argument("--selling-fees", type=Decimal)
+    deal_analyze.add_argument("--outbound-shipping", type=Decimal)
+    deal_analyze.add_argument("--other-selling-cost", type=Decimal)
+    deal_analyze.add_argument("--minimum-sale-days", type=int)
+    deal_analyze.add_argument("--maximum-sale-days", type=int)
     ebay = commands.add_parser("ebay", help="eBay seller integration")
     ebay_commands = ebay.add_subparsers(dest="ebay_command", required=True)
     ebay_commands.add_parser("connect", help="authorize a seller account")
@@ -535,6 +560,69 @@ def build_parser() -> argparse.ArgumentParser:
         )
     report_commands.add_parser("valuation", help="show baseline estimate accuracy")
     return parser
+
+
+def run_deals_command(args: argparse.Namespace) -> int:
+    """Print ephemeral generalized economics without writing inventory."""
+    try:
+        category = normalize_category(args.category)
+        if (args.minimum_sale_days is None) != (args.maximum_sale_days is None):
+            raise ValueError("minimum and maximum sale days must be supplied together")
+        time_to_sale = (
+            TimeToSale(args.minimum_sale_days, args.maximum_sale_days, "manual CLI input")
+            if args.minimum_sale_days is not None
+            else None
+        )
+
+        def estimate(value: Decimal | None, *, unknown: bool = False) -> CostComponent:
+            if value is not None:
+                return CostComponent.estimated(value, args.currency)
+            return CostComponent.unknown() if unknown else CostComponent.not_applicable()
+
+        economics = calculate_economics(
+            base_price=DealMoney(args.base_price, args.currency),
+            acquisition_tax=estimate(args.tax),
+            inbound_shipping=estimate(args.inbound_shipping),
+            pickup_travel_cost=estimate(args.travel_cost),
+            other_acquisition_cost=estimate(args.other_acquisition_cost),
+            expected_resale=estimate(args.expected_resale, unknown=True),
+            selling_fees=estimate(args.selling_fees),
+            outbound_shipping=estimate(args.outbound_shipping),
+            other_selling_cost=estimate(args.other_selling_cost),
+            time_to_sale=time_to_sale,
+        )
+        print(f"{args.title} | {category.label} | {args.source}")
+        print(f"Economics state: {economics.state.value.replace('_', ' ')}")
+        for label, value in (
+            ("Landed acquisition cost", economics.landed_cost),
+            ("Expected net proceeds", economics.expected_net_proceeds),
+            ("Expected net profit", economics.expected_net_profit),
+            ("Capital tied up", economics.capital_tied_up),
+        ):
+            print(f"{label}: {_format_deal_money(value)}")
+        roi_display = economics.roi if economics.roi is not None else economics.roi_state.value
+        print(f"Expected ROI: {roi_display}")
+        if time_to_sale:
+            print(f"Time to sale: {time_to_sale.minimum_days}-{time_to_sale.maximum_days} days")
+        if economics.profit_velocity:
+            velocity = economics.profit_velocity
+            print(
+                "Expected profit/day: "
+                f"{_format_deal_money(velocity.conservative_profit_per_day)} to "
+                f"{_format_deal_money(velocity.optimistic_profit_per_day)}"
+            )
+        for reason in economics.unavailable_reasons:
+            print(f"Unavailable: {reason}")
+        return 0
+    except (TypeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _format_deal_money(value: DealMoney | None) -> str:
+    if value is None:
+        return "unknown"
+    return f"{value.currency} {value.amount.quantize(Decimal('0.01'))}"
 
 
 def run_acquisition_command(args: argparse.Namespace) -> int:
@@ -1183,6 +1271,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "acquire":
         return run_acquisition_command(args)
+    if args.command == "deals":
+        return run_deals_command(args)
     if args.command == "ebay":
         return run_ebay_command(args)
     if args.command == "inventory":

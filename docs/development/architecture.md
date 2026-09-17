@@ -13,3 +13,8 @@ Listings route deliberately isolates its live read.
 Keep optional AI, market-data, Discord, and marketplace paths independently fallible. Preserve exact
 money, stable identity, transactionality, privacy boundaries, and existing valuation/scoring when
 working on unrelated features.
+
+The ephemeral `deals/` domain layers category/source normalization, `DealOpportunity`, exact expected
+economics, evidence/risk, and dimension-preserving comparison. The legacy PC parser and estimator
+adapt into that domain but retain their existing behavior. Deal analysis does not touch the
+inventory schema or realized-accounting services.

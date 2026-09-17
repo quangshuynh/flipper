@@ -15,3 +15,7 @@ proceeds. Market-data observations are active asking prices rather than evidence
 Use `--no-ai`, `--no-market`, or `--no-alert` to disable optional stages. Run `python main.py --help`
 for the authoritative option list. A normal analysis never creates inventory; use the explicit
 [acquisition workflow](acquisition.md) after a purchase decision.
+
+For explicit source-neutral inputs, `python main.py deals analyze --help` calculates exact expected
+economics without persistence. See [Generalized deal intelligence](../concepts/deal-intelligence.md)
+for unknown-value, ROI, velocity, evidence, and comparison semantics.
