@@ -6,7 +6,7 @@ import os
 import sqlite3
 from collections import defaultdict
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -19,7 +19,14 @@ from dotenv import load_dotenv
 from starlette.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from acquisition import acquire_opportunity
+from deals.categories import DealCategory, normalize_category
+from deals.ebay import EBAY_CATEGORY_MAP, normalize_ebay_item, normalize_search_results
+from deals.economics import calculate_economics
+from deals.evaluation import DealEvaluation
+from deals.models import ConfidenceEvidence, CostComponent, EvidenceLevel, RiskFactor, TimeToSale
 from ebay.compliance import app
+from ebay.discovery import DiscoveryConfig, EbayDiscoveryClient, EbayDiscoveryError
 from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
 from ebay.listing_reconciliation import summarize as summarize_listings
 from ebay.listing_workflow import import_listing, reconcile_listings, sync_listings
@@ -74,7 +81,15 @@ def _percent(value: Decimal | None) -> str:
     return "Unavailable" if value is None else f"{value * 100:,.1f}%"
 
 
+def _money_two_places(value: Decimal | None, currency: str = "USD") -> str:
+    if value is None:
+        return "Unavailable"
+    rounded = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{currency} {rounded:,.2f}"
+
+
 templates.env.filters["money"] = _money
+templates.env.filters["money2"] = _money_two_places
 templates.env.filters["percent"] = _percent
 
 
@@ -108,6 +123,50 @@ def _live_listing_results(store: InventoryStore):
     oauth = SellerOAuthClient(SellerOAuthConfig.from_environment())
     listings = ActiveListingsClient(oauth).get_active_listings()
     return reconcile_listings(store, listings)
+
+
+def _discovery() -> EbayDiscoveryClient:
+    return EbayDiscoveryClient(DiscoveryConfig.from_environment())
+
+
+def _estimated(value: str, currency: str) -> CostComponent:
+    return CostComponent.estimated(value, currency) if value else CostComponent.unknown()
+
+
+def _deal_analysis(opportunity, shipping, values: dict[str, str]) -> DealEvaluation:
+    minimum = values.get("minimum_sale_days", "")
+    maximum = values.get("maximum_sale_days", "")
+    time_to_sale = None
+    if minimum or maximum:
+        if not minimum or not maximum:
+            raise ValueError("both minimum and maximum sale days are required")
+        time_to_sale = TimeToSale(int(minimum), int(maximum), "user estimate")
+    currency = opportunity.base_price.currency
+    economics = calculate_economics(
+        base_price=opportunity.base_price,
+        acquisition_tax=_estimated(values.get("tax", ""), currency),
+        inbound_shipping=shipping,
+        pickup_travel_cost=_estimated(values.get("travel_cost", ""), currency),
+        other_acquisition_cost=_estimated(values.get("other_acquisition_cost", ""), currency),
+        expected_resale=_estimated(values.get("expected_resale", ""), currency),
+        selling_fees=_estimated(values.get("selling_fees", ""), currency),
+        outbound_shipping=_estimated(values.get("outbound_shipping", ""), currency),
+        other_selling_cost=_estimated(values.get("other_selling_cost", ""), currency),
+        time_to_sale=time_to_sale,
+    )
+    risks = [
+        RiskFactor("no-sold-evidence", "Browse supplies active listings, not sold comparables.")
+    ]
+    if shipping.status.value == "unknown":
+        risks.append(RiskFactor("unknown-inbound-shipping", "Inbound shipping is unknown."))
+    if time_to_sale is None:
+        risks.append(RiskFactor("unknown-time-to-sale", "Time-to-sale is unknown."))
+    return DealEvaluation(
+        economics=economics,
+        time_to_sale=time_to_sale,
+        confidence=ConfidenceEvidence(category_match=EvidenceLevel.WEAK),
+        risks=tuple(risks),
+    )
 
 
 def _safe_ebay_error(exc: Exception) -> str:
@@ -391,6 +450,123 @@ def analytics_page(request: Request):
 @app.get("/analyze", response_class=HTMLResponse)
 def analyze_page(request: Request):
     return _render(request, "analyze.html", section="analyze", title="Analyze")
+
+
+@app.get("/deals", response_class=HTMLResponse)
+def deals_page(
+    request: Request,
+    q: str = "",
+    category: str = "",
+    minimum_price: str = "",
+    maximum_price: str = "",
+    condition: str = "",
+    sort: str = "relevance",
+    page: int = 1,
+):
+    results = []
+    error = None
+    page = max(1, min(page, 100))
+    selected_category = None
+    if category:
+        try:
+            selected_category = normalize_category(category)
+        except ValueError:
+            error = "Choose a recognized Flipper category."
+    if q and error is None:
+        try:
+            body = _discovery().search(
+                q,
+                category_id=next(
+                    (key for key, value in EBAY_CATEGORY_MAP.items() if value == selected_category),
+                    None,
+                ),
+                minimum_price=minimum_price or None,
+                maximum_price=maximum_price or None,
+                condition=condition or None,
+                limit=24,
+                offset=(page - 1) * 24,
+            )
+            results.extend(normalize_search_results(body))
+        except (EbayDiscoveryError, ValueError):
+            error = (
+                "eBay discovery is unavailable or the search is invalid. "
+                "Check configuration and filters."
+            )
+    if sort in {"price_asc", "price_desc"}:
+        results.sort(key=lambda row: row[0].base_price.amount, reverse=sort.endswith("desc"))
+    else:
+        sort = "relevance"
+    return _render(
+        request,
+        "deals.html",
+        section="deals",
+        title="Deals",
+        results=results,
+        error=error,
+        searched=bool(q),
+        categories=DealCategory,
+        q=q,
+        category=category,
+        minimum_price=minimum_price,
+        maximum_price=maximum_price,
+        condition=condition,
+        sort=sort,
+        page=page,
+    )
+
+
+@app.get("/deals/ebay/{item_id}", response_class=HTMLResponse)
+def deal_detail(request: Request, item_id: str):
+    values = dict(request.query_params)
+    try:
+        opportunity, shipping = normalize_ebay_item(_discovery().get_item(item_id))
+        evaluation = _deal_analysis(opportunity, shipping, values)
+    except (EbayDiscoveryError, ValueError):
+        return _render(
+            request,
+            "error.html",
+            section="deals",
+            title="Deal unavailable",
+            message="The eBay opportunity could not be loaded or an assumption was invalid.",
+            status_code=503,
+        )
+    return _render(
+        request,
+        "deal_detail.html",
+        section="deals",
+        title="Deal analysis",
+        opportunity=opportunity,
+        shipping=shipping,
+        evaluation=evaluation,
+        values=values,
+    )
+
+
+@app.post("/deals/ebay/{item_id}/acquire")
+async def deal_acquire(request: Request, item_id: str):
+    fields = await _post_fields(request)
+    required = {
+        "acquisition_cost": "actual acquisition cost",
+        "acquired_at": "actual acquisition date",
+        "acquisition_source": "actual acquisition source",
+    }
+    missing = [label for name, label in required.items() if not fields.get(name)]
+    if missing:
+        return _redirect(f"/deals/ebay/{item_id}", error_message=f"Required: {', '.join(missing)}.")
+    try:
+        opportunity, _ = normalize_ebay_item(_discovery().get_item(item_id))
+        record = acquire_opportunity(
+            _store(),
+            opportunity,
+            acquisition_cost=fields["acquisition_cost"],
+            acquired_at=fields["acquired_at"],
+            acquisition_source=fields["acquisition_source"],
+        )
+    except EbayDiscoveryError:
+        return _redirect(f"/deals/ebay/{item_id}", error_message="eBay discovery is unavailable.")
+    except (InventoryValidationError, ValueError) as exc:
+        return _redirect(f"/deals/ebay/{item_id}", error_message=str(exc))
+    return _redirect(f"/inventory/{record.inventory_id}", message="Acquisition recorded.")
 
 
 @app.get("/settings", response_class=HTMLResponse)

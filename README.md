@@ -10,8 +10,8 @@
 
 Flipper is a local-first resale intelligence and operations tool for evaluating opportunities,
 tracking acquired inventory, reconciling marketplace activity, and measuring realized results.
-Its current analyzer began with exported secondhand-computer listings. The generalized core can now
-model manual opportunities across categories; vendor ingestion remains future work.
+Its current analyzer began with exported secondhand-computer listings. The generalized core now
+powers a read-only eBay discovery workspace while preserving explicit unknown economics.
 
 ```text
 Find the flip → Understand the economics → Acquire it → Track inventory
@@ -24,6 +24,7 @@ Find the flip → Understand the economics → Acquire it → Track inventory
 - Creates durable Q-number inventory records from explicit acquisitions.
 - Tracks lifecycle, attachments, valuations, sales, costs, and reconciliation in local SQLite.
 - Reads eBay seller listings, orders, and Finances data through authorized APIs without marketplace writes.
+- Searches active eBay opportunities in a read-only, ephemeral Deals workspace.
 - Presents local operational reports in a server-rendered web dashboard.
 
 Flipper is not a marketplace crawler, a complete accounting system, or an eBay listing manager.

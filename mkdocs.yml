@@ -11,6 +11,9 @@ theme:
   features:
     - navigation.sections
     - navigation.indexes
+    - navigation.footer
+    - navigation.instant
+    - navigation.tracking
     - navigation.top
     - content.code.copy
     - search.highlight
@@ -23,27 +26,27 @@ extra_css:
   - stylesheets/extra.css
 nav:
   - Home: index.md
-  - Getting started: getting-started.md
-  - Guides:
-      - Analysis: guides/analysis.md
+  - Getting Started: getting-started.md
+  - Deal Intelligence:
+      - Overview & Economics: concepts/deal-intelligence.md
+      - eBay Discovery: guides/ebay-discovery.md
+      - PC Analysis: guides/analysis.md
+  - Inventory:
       - Acquisition: guides/acquisition.md
-      - Inventory & attachments: guides/inventory-attachments.md
-      - eBay: guides/ebay.md
+      - Lifecycle: concepts/q-numbers-lifecycle.md
+      - Inventory & Attachments: guides/inventory-attachments.md
+      - Valuations & Money: concepts/valuations-money.md
+  - Selling:
+      - eBay Seller Integration: guides/ebay.md
       - Sales & accounting: guides/sales-accounting.md
-      - Reports & dashboard: guides/reports-dashboard.md
-  - Concepts:
-      - Deal intelligence: concepts/deal-intelligence.md
-      - Q-numbers & lifecycle: concepts/q-numbers-lifecycle.md
-      - Valuations & money: concepts/valuations-money.md
       - Reconciliation: concepts/reconciliation.md
+      - Reports & dashboard: guides/reports-dashboard.md
   - Reference:
       - CLI: reference/cli.md
       - Configuration: reference/configuration.md
-  - Operations:
       - Backup boundary: operations/backup-boundary.md
       - Troubleshooting: operations/troubleshooting.md
   - Development:
       - Architecture: development/architecture.md
       - Testing & migrations: development/testing-migrations.md
-  - Roadmap:
-      - Deals: roadmap/deals.md
+      - Roadmap: roadmap/deals.md

@@ -36,6 +36,9 @@ uvicorn web.app:app --reload
 Open `http://127.0.0.1:8000`. Set `FLIPPER_INVENTORY_DB` to select another local SQLite database.
 The process initializes and migrates that database. Use a copy when experimenting.
 
+Open `/deals` to run an explicit, read-only eBay discovery search when application credentials and
+production access are configured. The dashboard and other local pages do not trigger discovery.
+
 ## Optional integrations
 
 Environment variables can enable OpenAI enrichment, market-data lookup, Discord alerts, and eBay

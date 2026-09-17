@@ -3,6 +3,8 @@
   --md-primary-fg-color--light: #354140;
   --md-primary-fg-color--dark: #151c1d;
   --md-accent-fg-color: #f28a63;
+  --md-text-font: "Inter", "Segoe UI", system-ui, sans-serif;
+  --md-code-font: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 }
 
 [data-md-color-scheme="slate"] {
@@ -21,11 +23,20 @@
 
 .md-header,
 .md-tabs { background: #161d1e; }
-.md-header { border-bottom: 3px solid #f07a4f; }
+.md-header { min-height: 3.2rem; border-bottom: 2px solid #f07a4f; }
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg { border-radius: 50%; background: #f5f1e8; }
 .md-main,
 .md-container { background: #202526; }
+.md-grid { max-width: 78rem; }
+.md-content__inner { max-width: 48rem; margin-inline: auto; padding-top: 1.6rem; }
+.md-typeset { font-size: .79rem; line-height: 1.72; }
+.md-typeset h1 { margin-bottom: 1.4rem; color: #f6f4ed; font-size: 2.15rem; font-weight: 760; letter-spacing: -.035em; }
+.md-typeset h2 { margin-top: 2.8rem; padding-bottom: .35rem; border-bottom: 1px solid #46504e; font-size: 1.42rem; }
+.md-typeset h3 { margin-top: 2rem; font-size: 1.05rem; }
+.md-typeset p,
+.md-typeset ul,
+.md-typeset ol { margin-block: .8rem; }
 .md-sidebar__scrollwrap,
 .md-search__form,
 .md-search-result__meta { background: #292f30; }
@@ -33,13 +44,23 @@
 .md-typeset a:hover { color: #ff9a74; }
 .md-typeset code,
 .md-typeset pre > code { color: #f2f5f2; }
+.md-typeset pre { border: 1px solid #3e4947; border-radius: .35rem; }
 .md-typeset table:not([class]) { border: 1px solid #69736f; background: #292f30; }
 .md-typeset table:not([class]) th { background: #343d3c; color: #f5f7f5; }
 .md-typeset table:not([class]) td { border-top-color: #46504e; }
 .md-typeset .admonition,
 .md-typeset details { background: #292f30; border-width: 1px 1px 1px .2rem; }
+.md-nav__title,
+.md-nav__link { font-size: .7rem; }
+.md-nav__link--active { font-weight: 750; }
+.md-footer { border-top: 1px solid #3c4745; }
 :is(a, button, input, summary):focus-visible { outline: 3px solid #f3a182; outline-offset: 3px; }
 
 @media screen and (max-width: 44.984375em) {
+  .md-content__inner { padding-top: 1rem; }
+  .md-typeset h1 { font-size: 1.8rem; }
+  .md-typeset pre { max-width: calc(100vw - 2rem); margin-inline: 0; }
+  .md-typeset__scrollwrap { max-width: calc(100vw - 2rem); margin-inline: 0; }
+  .md-typeset__table { width: 100%; }
   .md-typeset table:not([class]) { font-size: .72rem; }
 }
