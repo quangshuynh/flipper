@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
+from keyring.errors import KeyringError
 
 from inventory.store import InventoryStore
 from web.app import app
@@ -134,15 +135,65 @@ def test_settings_exposes_status_but_never_secrets(monkeypatch, tmp_path):
     }
     for name, value in secrets.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setattr("web.app.keyring.get_password", lambda *_: "refresh-token-secret-value")
+    monkeypatch.setattr(
+        "ebay.seller_oauth.keyring.get_password", lambda *_: "refresh-token-secret-value"
+    )
 
     response = client.get("/settings")
 
     assert response.status_code == 200
+    assert "Production" in response.text
     assert "Connected" in response.text
-    assert "Available" in response.text
+    assert "Complete" in response.text
     for value in (*secrets.values(), "refresh-token-secret-value"):
         assert value not in response.text
+
+
+def test_settings_displays_sandbox_and_disconnected(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setenv("EBAY_SELLER_ENV", "sandbox")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("EBAY_SELLER_RUNAME", "runame")
+    monkeypatch.setattr("ebay.seller_oauth.keyring.get_password", lambda *_: None)
+
+    response = client.get("/settings")
+
+    assert "Sandbox" in response.text
+    assert "Complete" in response.text
+    assert "Disconnected" in response.text
+
+
+def test_settings_handles_incomplete_configuration(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setenv("EBAY_SELLER_ENV", "production")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_SECRET", "secret-not-rendered")
+    monkeypatch.delenv("EBAY_SELLER_RUNAME")
+
+    response = client.get("/settings")
+
+    assert "Production" in response.text
+    assert "Incomplete — missing seller client configuration" in response.text
+    assert "secret-not-rendered" not in response.text
+
+
+def test_settings_handles_credential_store_failure(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setenv("EBAY_SELLER_ENV", "production")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("EBAY_SELLER_RUNAME", "runame")
+
+    def fail(*_):
+        raise KeyringError("synthetic secret error")
+
+    monkeypatch.setattr("ebay.seller_oauth.keyring.get_password", fail)
+
+    response = client.get("/settings")
+
+    assert "Authorization unavailable" in response.text
+    assert "synthetic secret error" not in response.text
 
 
 def test_missing_records_are_safe_html_errors(monkeypatch, tmp_path):
