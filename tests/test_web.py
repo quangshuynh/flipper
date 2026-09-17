@@ -114,6 +114,7 @@ def test_shared_shell_brand_favicon_navigation_and_active_state(monkeypatch, tmp
         "/ebay/listings",
         "/sales",
         "/analytics",
+        "/insights",
         "/analyze",
         "/settings",
     ):
@@ -124,7 +125,15 @@ def test_shared_shell_brand_favicon_navigation_and_active_state(monkeypatch, tmp
 def test_all_local_primary_pages_render_shared_shell(monkeypatch, tmp_path):
     client, _ = _client(monkeypatch, tmp_path)
 
-    for path in ("/", "/inventory", "/sales", "/analytics", "/analyze", "/settings"):
+    for path in (
+        "/",
+        "/inventory",
+        "/sales",
+        "/analytics",
+        "/insights",
+        "/analyze",
+        "/settings",
+    ):
         response = client.get(path)
         assert response.status_code == 200
         assert "Flipper dashboard" in response.text

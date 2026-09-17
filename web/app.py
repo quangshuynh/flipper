@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from uuid import uuid4
@@ -66,6 +66,7 @@ from inventory.store import (
 )
 from reports.service import (
     build_summary_report,
+    historical_insights,
     inventory_report,
     sales_report,
     valuation_accuracy_report,
@@ -714,6 +715,23 @@ def analytics_page(request: Request):
         sales_by_month={key: dict(value) for key, value in sorted(sales_by_month.items())},
         profit_by_month={key: dict(value) for key, value in sorted(profit_by_month.items())},
         valuations=valuations,
+    )
+
+
+@app.get("/insights", response_class=HTMLResponse)
+def insights_page(request: Request, range: str = "all"):
+    presets = {"all": None, "30": 30, "90": 90, "365": 365}
+    selected = range if range in presets else "all"
+    end = _today() if presets[selected] is not None else None
+    start = end - timedelta(days=presets[selected] - 1) if end is not None else None
+    insights = historical_insights(_store(), start=start, end=end)
+    return _render(
+        request,
+        "insights.html",
+        section="insights",
+        title="Historical Insights",
+        insights=insights,
+        selected_range=selected,
     )
 
 

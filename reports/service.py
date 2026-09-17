@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from statistics import median
 
+from deals.categories import normalize_category
 from inventory.store import (
     RECONCILIATION_CATEGORIES,
     InventoryRecord,
@@ -75,6 +76,35 @@ class SalesReport:
 class SummaryReport:
     inventory: InventoryReport
     sales: SalesReport
+
+
+@dataclass(frozen=True)
+class HistoricalInsightGroup:
+    """Descriptive completed-sale facts for one source or category."""
+
+    name: str
+    completed_count: int
+    revenue_by_currency: dict[str, Decimal]
+    realized_profit_complete_count: int
+    incomplete_accounting_count: int
+    unavailable_profit_count: int
+    total_realized_profit_usd: Decimal | None
+    median_realized_profit_usd: Decimal | None
+    median_realized_roi: Decimal | None
+    realized_roi_count: int
+    median_holding_days: Decimal | None
+    holding_days_count: int
+
+
+@dataclass(frozen=True)
+class HistoricalInsights:
+    """Historical outcomes derived from authoritative completed sale records."""
+
+    start: date | None
+    end: date | None
+    overall: HistoricalInsightGroup
+    by_source: tuple[HistoricalInsightGroup, ...]
+    by_category: tuple[HistoricalInsightGroup, ...]
 
 
 @dataclass(frozen=True)
@@ -323,6 +353,98 @@ def build_summary_report(
             start=start,
             end=end,
         ),
+    )
+
+
+def _insight_group(name: str, rows: list[SaleReportRow]) -> HistoricalInsightGroup:
+    revenue: dict[str, Decimal] = defaultdict(Decimal)
+    profits: list[Decimal] = []
+    rois: list[Decimal] = []
+    holding_days: list[int] = []
+    incomplete = 0
+    unavailable = 0
+    for row in rows:
+        revenue[row.sale.currency] += row.sale.gross_amount
+        if row.days_held is not None:
+            holding_days.append(row.days_held)
+        if row.reconciliation_state != "fully_reconciled":
+            incomplete += 1
+            continue
+        if row.economics is None:
+            unavailable += 1
+            continue
+        profit = row.economics.recorded_profit
+        profits.append(profit)
+        cost_basis = row.economics.gross - profit
+        if cost_basis > 0:
+            rois.append(profit / cost_basis)
+    return HistoricalInsightGroup(
+        name=name,
+        completed_count=len(rows),
+        revenue_by_currency=dict(revenue),
+        realized_profit_complete_count=len(profits),
+        incomplete_accounting_count=incomplete,
+        unavailable_profit_count=unavailable,
+        total_realized_profit_usd=sum(profits, Decimal(0)) if profits else None,
+        median_realized_profit_usd=Decimal(median(profits)) if profits else None,
+        median_realized_roi=Decimal(median(rois)) if rois else None,
+        realized_roi_count=len(rois),
+        median_holding_days=Decimal(median(holding_days)) if holding_days else None,
+        holding_days_count=len(holding_days),
+    )
+
+
+def historical_insights(
+    store: InventoryStore,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> HistoricalInsights:
+    """Aggregate completed outcomes, filtering inclusively by the UTC sale date."""
+    inventory = store.list()
+    inventory_by_id = {item.internal_id: item for item in inventory}
+    report = sales_report(
+        inventory,
+        store.list_sales(),
+        store.list_all_sale_costs(),
+        store.list_reconciliation_confirmations(),
+        store.list_sourcing_travel(),
+        start=start,
+        end=end,
+    )
+
+    category_values: dict[str, set[str]] = defaultdict(set)
+    for snapshot in store.list_research_snapshots():
+        if snapshot.inventory_id:
+            try:
+                category_values[snapshot.inventory_id].add(
+                    normalize_category(snapshot.category).label
+                )
+            except ValueError:
+                # Old or otherwise unrecognized research remains explicitly unknown.
+                pass
+
+    source_rows: dict[str, list[SaleReportRow]] = defaultdict(list)
+    category_rows: dict[str, list[SaleReportRow]] = defaultdict(list)
+    for row in report.rows:
+        item = inventory_by_id[row.sale.inventory_internal_id]
+        source_rows[item.source].append(row)
+        categories = category_values.get(item.inventory_id, set())
+        category = next(iter(categories)) if len(categories) == 1 else "Unknown"
+        category_rows[category].append(row)
+
+    def grouped(values: dict[str, list[SaleReportRow]]) -> tuple[HistoricalInsightGroup, ...]:
+        groups = (_insight_group(name, rows) for name, rows in values.items())
+        return tuple(
+            sorted(groups, key=lambda group: (-group.completed_count, group.name.casefold()))
+        )
+
+    return HistoricalInsights(
+        start=start,
+        end=end,
+        overall=_insight_group("All completed sales", list(report.rows)),
+        by_source=grouped(source_rows),
+        by_category=grouped(category_rows),
     )
 
 

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% macro revenues(values) -%}
+  {% if values %}{% for currency, amount in values|dictsort %}{{ amount|money(currency) }}{% if not loop.last %}<br>{% endif %}{% endfor %}{% else %}Unavailable{% endif %}
+{%- endmacro %}
+{% macro insight_table(title, groups) -%}
+<section class="panel table-wrap">
+  <h2>{{ title }}</h2>
+  {% if groups %}
+  <table>
+    <thead><tr><th scope="col">{{ title|replace('By ', '') }}</th><th scope="col">Completed</th><th scope="col">Revenue</th><th scope="col">Realized profit</th><th scope="col">Median profit</th><th scope="col">Median ROI</th><th scope="col">Median holding time</th></tr></thead>
+    <tbody>{% for group in groups %}<tr>
+      <th scope="row">{{ group.name }}{% if group.completed_count < 3 %}<small>Small sample</small>{% endif %}</th>
+      <td>{{ group.completed_count }}</td>
+      <td>{{ revenues(group.revenue_by_currency) }}</td>
+      <td>{{ group.total_realized_profit_usd|money if group.total_realized_profit_usd is not none else 'Unavailable' }}<small>{{ group.realized_profit_complete_count }} complete; {{ group.incomplete_accounting_count }} incomplete{% if group.unavailable_profit_count %}; {{ group.unavailable_profit_count }} currency-incompatible{% endif %}</small></td>
+      <td>{{ group.median_realized_profit_usd|money if group.median_realized_profit_usd is not none else 'Unavailable' }}<small>{{ group.realized_profit_complete_count }} item{{ '' if group.realized_profit_complete_count == 1 else 's' }}</small></td>
+      <td>{{ group.median_realized_roi|percent }}<small>{{ group.realized_roi_count }} item{{ '' if group.realized_roi_count == 1 else 's' }}</small></td>
+      <td>{{ group.median_holding_days if group.median_holding_days is not none else 'Unavailable' }}{% if group.median_holding_days is not none %} days{% endif %}<small>{{ group.holding_days_count }} item{{ '' if group.holding_days_count == 1 else 's' }}</small></td>
+    </tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<p class="empty">No completed sales in this period.</p>{% endif %}
+</section>
+{%- endmacro %}
+{% block actions %}<a class="button secondary" href="/sales">Review sales</a>{% endblock %}
+{% block content %}
+<form class="filters" method="get" action="/insights">
+  <label for="range">Completed in<select id="range" name="range"><option value="all"{% if selected_range == 'all' %} selected{% endif %}>All time</option><option value="30"{% if selected_range == '30' %} selected{% endif %}>Last 30 days</option><option value="90"{% if selected_range == '90' %} selected{% endif %}>Last 90 days</option><option value="365"{% if selected_range == '365' %} selected{% endif %}>Last 365 days</option></select></label>
+  <button type="submit">Apply</button>
+</form>
+{% set overall = insights.overall %}
+<section class="metrics">
+  <article class="metric-primary"><span>Completed sales</span><strong>{{ overall.completed_count }}</strong><small>{% if insights.start %}{{ insights.start }} through {{ insights.end }}{% else %}All recorded sale dates{% endif %}</small></article>
+  <article><span>Gross revenue</span><strong>{{ revenues(overall.revenue_by_currency) }}</strong><small>Authoritative recorded sales</small></article>
+  <article><span>Realized profit</span><strong>{{ overall.total_realized_profit_usd|money if overall.total_realized_profit_usd is not none else 'Unavailable' }}</strong><small>{{ overall.realized_profit_complete_count }} fully reconciled USD item{{ '' if overall.realized_profit_complete_count == 1 else 's' }}</small></article>
+  <article><span>Incomplete accounting</span><strong>{{ overall.incomplete_accounting_count }}</strong><small>Excluded from profit and ROI{% if overall.unavailable_profit_count %}; {{ overall.unavailable_profit_count }} more currency-incompatible{% endif %}</small></article>
+</section>
+<section class="panel">
+  <h2>Typical completed outcome</h2>
+  <dl class="inline-stats"><div><dt>Median realized profit</dt><dd>{{ overall.median_realized_profit_usd|money if overall.median_realized_profit_usd is not none else 'Unavailable' }}</dd><small>{{ overall.realized_profit_complete_count }} item{{ '' if overall.realized_profit_complete_count == 1 else 's' }}</small></div><div><dt>Median realized ROI</dt><dd>{{ overall.median_realized_roi|percent }}</dd><small>{{ overall.realized_roi_count }} item{{ '' if overall.realized_roi_count == 1 else 's' }}</small></div><div><dt>Median holding time</dt><dd>{{ overall.median_holding_days if overall.median_holding_days is not none else 'Unavailable' }}{% if overall.median_holding_days is not none %} days{% endif %}</dd><small>{{ overall.holding_days_count }} item{{ '' if overall.holding_days_count == 1 else 's' }}</small></div></dl>
+  <p class="muted">Profit and ROI require fully reconciled USD accounting. ROI divides realized profit by positive recorded cost basis. Holding time runs from acquisition date through the UTC sale date. Missing values are excluded, never treated as zero.</p>
+</section>
+{{ insight_table('By source', insights.by_source) }}
+{{ insight_table('By category', insights.by_category) }}
+<section class="panel"><h2>Interpretation boundary</h2><p>These are descriptive historical facts, not rankings, recommendations, or forecasts. Categories come only from normalized research explicitly linked to inventory; otherwise they remain Unknown. Actual recorded sourcing travel is already included once in realized profit and cost basis.</p></section>
+{% endblock %}
