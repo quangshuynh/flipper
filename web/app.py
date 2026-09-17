@@ -29,6 +29,7 @@ from deals.comparables import (
 )
 from deals.ebay import EBAY_CATEGORY_MAP, normalize_ebay_item, normalize_search_results
 from deals.economics import calculate_economics
+from deals.manual import MANUAL_CONDITIONS, create_manual_opportunity
 from deals.evaluation import ComparisonResult, DealEvaluation, compare
 from deals.models import (
     ConfidenceEvidence,
@@ -189,9 +190,12 @@ def _deal_analysis(opportunity, shipping, values: dict[str, str]) -> DealEvaluat
         other_selling_cost=_estimated(values.get("other_selling_cost", ""), currency),
         time_to_sale=time_to_sale,
     )
-    risks = [
-        RiskFactor("no-sold-evidence", "Browse supplies active listings, not sold comparables.")
-    ]
+    evidence_explanation = (
+        "Browse supplies active listings, not sold comparables."
+        if opportunity.base_price_provenance.kind is ProvenanceKind.SOURCE_API
+        else "Manual source facts do not establish sold comparable evidence."
+    )
+    risks = [RiskFactor("no-sold-evidence", evidence_explanation)]
     if shipping.status.value == "unknown":
         risks.append(RiskFactor("unknown-inbound-shipping", "Inbound shipping is unknown."))
     if time_to_sale is None:
@@ -204,7 +208,7 @@ def _deal_analysis(opportunity, shipping, values: dict[str, str]) -> DealEvaluat
                 EvidenceLevel.STRONG
                 if opportunity.category_provenance.label == "eBay Taxonomy ancestry"
                 else EvidenceLevel.WEAK
-                if opportunity.category_provenance.kind is not ProvenanceKind.UNKNOWN
+                if opportunity.category_provenance.kind is ProvenanceKind.SOURCE_API
                 else None
             )
         ),
@@ -219,6 +223,19 @@ def _safe_ebay_error(exc: Exception) -> str:
             "Reconnect with the supported CLI connection workflow, then try again."
         )
     return "eBay listings are temporarily unavailable. No local inventory was changed."
+
+
+def _safe_discovery_error(exc: Exception) -> str:
+    if isinstance(exc, ValueError):
+        return "The eBay search filters are invalid. Check the entered values."
+    message = str(exc).casefold()
+    if "not configured" in message or "ebay_discovery_env" in message:
+        return "eBay discovery is not configured. Add matching environment credentials."
+    if "authentication" in message and ("rejected" in message or "malformed" in message):
+        return "eBay discovery authentication was rejected. Check the selected environment."
+    if "http 4" in message:
+        return "eBay discovery access was rejected. Check configuration and search filters."
+    return "eBay discovery is temporarily unavailable. Try again later."
 
 
 async def _post_fields(request: Request) -> dict[str, str]:
@@ -251,6 +268,34 @@ def _research_session(request: Request) -> str | None:
 
 def _research_key(item_id: str) -> str:
     return f"ebay:{item_id}"
+
+
+def _manual_key(opportunity_id: str) -> str:
+    return f"manual:{opportunity_id}"
+
+
+def _opportunity_path(key: str) -> str:
+    if key.startswith("ebay:"):
+        return f"/deals/ebay/{key.removeprefix('ebay:')}"
+    return f"/deals/opportunities/{key.removeprefix('manual:')}"
+
+
+def _resolve_opportunity(request: Request, key: str):
+    if key.startswith("manual:"):
+        stored = research_store.get_opportunity(
+            _research_session(request), key.removeprefix("manual:")
+        )
+        return stored.opportunity, stored.inbound_shipping, stored.notes
+    if key.startswith("ebay:"):
+        client = _discovery()
+        ancestry, marketplace = _taxonomy(client)
+        opportunity, shipping = normalize_ebay_item(
+            client.get_item(key.removeprefix("ebay:")),
+            category_ancestry=ancestry,
+            marketplace_id=marketplace,
+        )
+        return opportunity, shipping, None
+    raise LookupError("opportunity was not found")
 
 
 def _comparable_from_fields(fields: dict[str, str], category: DealCategory) -> Comparable:
@@ -564,11 +609,8 @@ def deals_page(
                     body, category_ancestry=ancestry, marketplace_id=marketplace
                 )
             )
-        except (EbayDiscoveryError, ValueError):
-            error = (
-                "eBay discovery is unavailable or the search is invalid. "
-                "Check configuration and filters."
-            )
+        except (EbayDiscoveryError, ValueError) as exc:
+            error = _safe_discovery_error(exc)
     if sort in {"price_asc", "price_desc"}:
         results.sort(key=lambda row: row[0].base_price.amount, reverse=sort.endswith("desc"))
     else:
@@ -589,6 +631,74 @@ def deals_page(
         condition=condition,
         sort=sort,
         page=page,
+        manual_opportunities=research_store.list_opportunities(_research_session(request)),
+    )
+
+
+@app.get("/deals/opportunities/new", response_class=HTMLResponse)
+def manual_opportunity_form(request: Request):
+    return _render(
+        request,
+        "deal_add.html",
+        section="deals",
+        title="Add opportunity",
+        categories=DealCategory,
+        sources=SourceIdentity,
+        conditions=MANUAL_CONDITIONS,
+        values=dict(request.query_params),
+    )
+
+
+@app.post("/deals/opportunities")
+async def manual_opportunity_add(request: Request):
+    fields = await _post_fields(request)
+    session_id = _research_session(request) or uuid4().hex
+    try:
+        stored = create_manual_opportunity(fields)
+        opportunity_id = research_store.add_opportunity(session_id, stored)
+    except (KeyError, TypeError, ValueError) as exc:
+        return _redirect("/deals/opportunities/new", error_message=str(exc))
+    response = _redirect(f"/deals/opportunities/{opportunity_id}", message="Opportunity added.")
+    response.set_cookie(RESEARCH_COOKIE, session_id, httponly=True, samesite="strict")
+    return response
+
+
+@app.get("/deals/opportunities/{opportunity_id}", response_class=HTMLResponse)
+def manual_opportunity_detail(request: Request, opportunity_id: str):
+    values = dict(request.query_params)
+    key = _manual_key(opportunity_id)
+    try:
+        opportunity, shipping, notes = _resolve_opportunity(request, key)
+        evaluation = _deal_analysis(opportunity, shipping, values)
+    except (LookupError, ValueError):
+        return _render(
+            request,
+            "error.html",
+            section="deals",
+            title="Opportunity unavailable",
+            message="This ephemeral opportunity was not found or an assumption was invalid.",
+            status_code=404,
+        )
+    evidence = research_store.evidence_set(_research_session(request), key, as_of=_today())
+    return _render(
+        request,
+        "deal_detail.html",
+        section="deals",
+        title="Deal analysis",
+        opportunity=opportunity,
+        shipping=shipping,
+        evaluation=evaluation,
+        values=values,
+        notes=notes,
+        opportunity_key=key,
+        detail_path=_opportunity_path(key),
+        source_label=opportunity.source.value.replace("-", " ").title(),
+        research_rows=research_store.list(_research_session(request), key),
+        evidence=evidence,
+        comparable_types=ComparableType,
+        comparable_conditions=ComparableCondition,
+        source_identities=SourceIdentity,
+        today=_today().isoformat(),
     )
 
 
@@ -631,6 +741,10 @@ def deal_detail(request: Request, item_id: str):
         comparable_conditions=ComparableCondition,
         source_identities=SourceIdentity,
         today=_today().isoformat(),
+        notes=None,
+        opportunity_key=_research_key(item_id),
+        detail_path=f"/deals/ebay/{item_id}",
+        source_label="eBay API",
     )
 
 
@@ -648,10 +762,12 @@ def deal_compare(request: Request):
             error="Comparison state is too large.",
             status_code=400,
         )
-    item_ids = request.query_params.getlist("item_id")
-    unique_ids = list(dict.fromkeys(item_ids))
+    keys = request.query_params.getlist("opportunity_key")
+    if not keys:  # Preserve existing eBay-only links.
+        keys = [_research_key(item_id) for item_id in request.query_params.getlist("item_id")]
+    unique_ids = list(dict.fromkeys(keys))
     error = None
-    if len(unique_ids) != len(item_ids):
+    if len(unique_ids) != len(keys):
         error = "Choose each opportunity only once."
     elif not 2 <= len(unique_ids) <= 4:
         error = "Choose between 2 and 4 opportunities to compare."
@@ -667,10 +783,8 @@ def deal_compare(request: Request):
             error=error,
             status_code=400,
         )
-    client = _discovery()
-    ancestry, marketplace = _taxonomy(client)
     entries = []
-    for index, item_id in enumerate(unique_ids):
+    for index, opportunity_key in enumerate(unique_ids):
         prefix = f"d{index}_"
         values = {
             name: request.query_params.get(prefix + name, "")
@@ -687,18 +801,15 @@ def deal_compare(request: Request):
             )
         }
         try:
-            opportunity, shipping = normalize_ebay_item(
-                client.get_item(item_id),
-                category_ancestry=ancestry,
-                marketplace_id=marketplace,
-            )
+            opportunity, shipping, _ = _resolve_opportunity(request, opportunity_key)
             evaluation = _deal_analysis(opportunity, shipping, values)
             evidence = research_store.evidence_set(
-                _research_session(request), _research_key(item_id), as_of=_today()
+                _research_session(request), opportunity_key, as_of=_today()
             )
             entries.append(
                 {
-                    "item_id": item_id,
+                    "item_id": opportunity_key,
+                    "opportunity_key": opportunity_key,
                     "opportunity": opportunity,
                     "shipping": shipping,
                     "evaluation": evaluation,
@@ -710,8 +821,15 @@ def deal_compare(request: Request):
                     "error": None,
                 }
             )
-        except (EbayDiscoveryError, ValueError):
-            entries.append({"item_id": item_id, "index": index, "error": "Unavailable"})
+        except (EbayDiscoveryError, LookupError, ValueError):
+            entries.append(
+                {
+                    "item_id": opportunity_key,
+                    "opportunity_key": opportunity_key,
+                    "index": index,
+                    "error": "Unavailable",
+                }
+            )
     valid = [entry for entry in entries if not entry["error"]]
     comparisons = []
     dominated: set[str] = set()
@@ -825,6 +943,88 @@ async def deal_acquire(request: Request, item_id: str):
         return _redirect(f"/deals/ebay/{item_id}", error_message="eBay discovery is unavailable.")
     except (InventoryValidationError, ValueError) as exc:
         return _redirect(f"/deals/ebay/{item_id}", error_message=str(exc))
+    return _redirect(f"/inventory/{record.inventory_id}", message="Acquisition recorded.")
+
+
+@app.post("/deals/opportunities/{opportunity_id}/comparables")
+async def manual_comparable_add(request: Request, opportunity_id: str):
+    fields = await _post_fields(request)
+    session_id = _research_session(request)
+    path = f"/deals/opportunities/{opportunity_id}"
+    try:
+        if not session_id:
+            raise LookupError("manual opportunity was not found")
+        stored = research_store.get_opportunity(session_id, opportunity_id)
+        comparable = _comparable_from_fields(fields, stored.opportunity.category)
+        research_store.add(session_id, _manual_key(opportunity_id), comparable)
+    except (KeyError, LookupError, TypeError, ValueError) as exc:
+        return _redirect(path, error_message=str(exc))
+    return _redirect(path, message="Comparable added.")
+
+
+@app.post("/deals/opportunities/{opportunity_id}/comparables/{comparable_id}/edit")
+async def manual_comparable_edit(request: Request, opportunity_id: str, comparable_id: str):
+    fields = await _post_fields(request)
+    session_id = _research_session(request)
+    path = f"/deals/opportunities/{opportunity_id}"
+    try:
+        if not session_id:
+            raise LookupError("comparable record was not found")
+        stored = research_store.get_opportunity(session_id, opportunity_id)
+        research_store.replace(
+            session_id,
+            _manual_key(opportunity_id),
+            comparable_id,
+            _comparable_from_fields(fields, stored.opportunity.category),
+        )
+    except (KeyError, LookupError, TypeError, ValueError) as exc:
+        return _redirect(path, error_message=str(exc))
+    return _redirect(path, message="Comparable updated.")
+
+
+@app.post("/deals/opportunities/{opportunity_id}/comparables/{comparable_id}/remove")
+async def manual_comparable_remove(request: Request, opportunity_id: str, comparable_id: str):
+    await _post_fields(request)
+    session_id = _research_session(request)
+    path = f"/deals/opportunities/{opportunity_id}"
+    try:
+        if not session_id:
+            raise LookupError("comparable record was not found")
+        research_store.remove(session_id, _manual_key(opportunity_id), comparable_id)
+    except LookupError as exc:
+        return _redirect(path, error_message=str(exc))
+    return _redirect(path, message="Comparable removed.")
+
+
+@app.post("/deals/opportunities/{opportunity_id}/acquire")
+async def manual_deal_acquire(request: Request, opportunity_id: str):
+    fields = await _post_fields(request)
+    path = f"/deals/opportunities/{opportunity_id}"
+    required = {
+        "acquisition_cost": "actual acquisition cost",
+        "acquired_at": "actual acquisition date",
+        "acquisition_source": "actual acquisition source",
+    }
+    missing = [label for name, label in required.items() if not fields.get(name)]
+    if missing:
+        return _redirect(path, error_message=f"Required: {', '.join(missing)}.")
+    try:
+        stored = research_store.get_opportunity(_research_session(request), opportunity_id)
+        reference_notes = stored.notes or ""
+        if stored.opportunity.url:
+            reference_notes = "\n".join(
+                part for part in (reference_notes, f"Source URL: {stored.opportunity.url}") if part
+            )
+        record = acquire_opportunity(
+            _store(),
+            stored.opportunity,
+            acquisition_cost=fields["acquisition_cost"],
+            acquired_at=fields["acquired_at"],
+            acquisition_source=fields["acquisition_source"],
+            notes=reference_notes,
+        )
+    except (InventoryValidationError, LookupError, ValueError) as exc:
+        return _redirect(path, error_message=str(exc))
     return _redirect(f"/inventory/{record.inventory_id}", message="Acquisition recorded.")
 
 

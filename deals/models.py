@@ -51,6 +51,7 @@ class AmountStatus(str, Enum):
 
 class ProvenanceKind(str, Enum):
     SOURCE_API = "source_api"
+    USER_SOURCE_FACT = "user_source_fact"
     USER_ASSUMPTION = "user_assumption"
     FLIPPER_CALCULATION = "flipper_calculation"
     HISTORICAL_FLIPPER_DATA = "historical_flipper_data"

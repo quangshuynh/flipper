@@ -737,3 +737,131 @@ def test_comparable_validation_cross_origin_and_independent_comparison(monkeypat
     assert compared.text.count("median USD 75.00") == 1
     assert "Comps do not establish sell-through or duration" in compared.text
     assert "winner" not in compared.text.lower()
+
+
+def test_manual_opportunity_evaluate_compare_comparable_and_acquire(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(web_app, "_discovery", _Discovery)
+    web_app.research_store.clear()
+    created = client.post(
+        "/deals/opportunities",
+        data={
+            "source": "estate-sale",
+            "title": "Estate camera",
+            "category": "electronics",
+            "base_price": "20.25",
+            "currency": "USD",
+            "inbound_shipping": "1.75",
+            "condition": "used_untested",
+            "source_url": "https://example.test/estate/1",
+            "location_text": "Local hall",
+            "notes": "Inspect lens",
+        },
+        follow_redirects=False,
+    )
+    path = created.headers["location"].split("?", 1)[0]
+    opportunity_id = path.rsplit("/", 1)[-1]
+
+    detail = client.get(path)
+    analyzed = client.get(
+        path,
+        params={
+            "tax": "0",
+            "travel_cost": "0",
+            "other_acquisition_cost": "0",
+            "expected_resale": "80",
+            "selling_fees": "8",
+            "outbound_shipping": "0",
+            "other_selling_cost": "0",
+        },
+    )
+    added = client.post(
+        f"{path}/comparables",
+        data={
+            "evidence_type": "sold",
+            "source": "User research",
+            "price": "75",
+            "currency": "USD",
+            "condition": "used_tested",
+            "observed_date": "2026-09-17",
+        },
+        follow_redirects=False,
+    )
+    compared = client.get(
+        "/deals/compare",
+        params=[
+            ("opportunity_key", f"manual:{opportunity_id}"),
+            ("opportunity_key", "ebay:v1|123|0"),
+        ],
+    )
+    missing = client.post(
+        f"{path}/acquire", data={"acquisition_source": "Estate sale"}, follow_redirects=False
+    )
+    acquired = client.post(
+        f"{path}/acquire",
+        data={
+            "acquisition_cost": "18.00",
+            "acquired_at": "2026-09-17",
+            "acquisition_source": "Estate sale",
+        },
+        follow_redirects=False,
+    )
+
+    assert created.status_code == added.status_code == missing.status_code == 303
+    assert "User-provided source fact" in detail.text
+    assert "Needs assumptions" in detail.text
+    assert "USD 50.00" in analyzed.text
+    assert "Estate Sale" in compared.text and "eBay" in compared.text
+    assert "actual+acquisition+cost" in missing.headers["location"]
+    assert acquired.headers["location"].startswith("/inventory/Q0001")
+    record = store.get("Q0001")
+    assert record.acquisition_cost_cents == 1800
+    assert record.marketplace == "estate-sale"
+    assert "https://example.test/estate/1" in record.notes
+
+
+def test_manual_opportunity_validation_and_browser_isolation(monkeypatch, tmp_path):
+    first, _ = _client(monkeypatch, tmp_path)
+    web_app.research_store.clear()
+    rejected = first.post(
+        "/deals/opportunities",
+        data={
+            "source": "other",
+            "title": "Unsafe",
+            "category": "electronics",
+            "base_price": "nope",
+            "currency": "USD",
+            "condition": "unknown",
+            "source_url": "http://localhost/private",
+        },
+        follow_redirects=False,
+    )
+    valid = first.post(
+        "/deals/opportunities",
+        data={
+            "source": "local",
+            "title": "Local item",
+            "category": "electronics",
+            "base_price": "10",
+            "currency": "USD",
+            "condition": "unknown",
+        },
+        follow_redirects=False,
+    )
+    second, _ = _client(monkeypatch, tmp_path)
+
+    assert "asking+price" in rejected.headers["location"]
+    assert first.get(valid.headers["location"]).status_code == 200
+    assert second.get(valid.headers["location"]).status_code == 404
+
+
+def test_discovery_failures_are_distinct_and_sanitized():
+    assert "filters are invalid" in web_app._safe_discovery_error(ValueError("bad decimal"))
+    assert "not configured" in web_app._safe_discovery_error(
+        web_app.EbayDiscoveryError("eBay discovery is not configured")
+    )
+    rejected = web_app._safe_discovery_error(
+        web_app.EbayDiscoveryError("authentication rejected secret-token-value")
+    )
+    assert "authentication was rejected" in rejected
+    assert "secret-token-value" not in rejected

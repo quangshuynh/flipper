@@ -24,7 +24,7 @@ Find the flip → Understand the economics → Acquire it → Track inventory
 - Creates durable Q-number inventory records from explicit acquisitions.
 - Tracks lifecycle, attachments, valuations, sales, costs, and reconciliation in local SQLite.
 - Reads eBay seller listings, orders, and Finances data through authorized APIs without marketplace writes.
-- Searches active eBay opportunities in a read-only, ephemeral Deals workspace.
+- Researches live eBay and user-entered multi-source opportunities in an ephemeral Deals workspace.
 - Presents local operational reports in a server-rendered web dashboard.
 
 Flipper is not a marketplace crawler, a complete accounting system, or an eBay listing manager.
@@ -48,8 +48,8 @@ configuration, feed structure, and optional integrations.
 uvicorn web.app:app --reload
 ```
 
-Open `http://127.0.0.1:8000`. The dashboard uses local data; only the eBay Listings page performs
-an isolated live request.
+Open `http://127.0.0.1:8000`. The dashboard uses local data. Deals can search eBay through its
+read-only Browse API or analyze a manually entered opportunity without fetching its source URL.
 
 ## Documentation
 
