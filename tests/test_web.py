@@ -109,6 +109,7 @@ def test_shared_shell_brand_favicon_navigation_and_active_state(monkeypatch, tmp
     assert 'class="active" href="/inventory"' in response.text
     for path in (
         "/",
+        "/deals",
         "/inventory",
         "/ebay/listings",
         "/sales",
@@ -117,7 +118,6 @@ def test_shared_shell_brand_favicon_navigation_and_active_state(monkeypatch, tmp
         "/settings",
     ):
         assert f'href="{path}"' in response.text
-    assert 'href="/deals"' not in response.text
     assert "Deals" in response.text
 
 
@@ -487,3 +487,95 @@ def test_ebay_errors_are_sanitized_and_dashboard_never_fetches(monkeypatch, tmp_
     assert listings.status_code == 503
     assert "temporarily unavailable" in listings.text
     assert "raw-token-secret" not in listings.text
+
+
+def _discovery_item():
+    return {
+        "itemId": "v1|123|0",
+        "title": "Used mirrorless camera",
+        "price": {"value": "55.00", "currency": "USD"},
+        "categoryId": "293",
+        "condition": "Used",
+        "itemWebUrl": "https://www.ebay.com/itm/123",
+        "shippingOptions": [{"shippingCost": {"value": "5.00", "currency": "USD"}}],
+    }
+
+
+class _Discovery:
+    def search(self, *args, **kwargs):
+        return {"itemSummaries": [_discovery_item()]}
+
+    def get_item(self, item_id):
+        assert item_id == "v1|123|0"
+        return _discovery_item()
+
+
+def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(web_app, "_discovery", _Discovery)
+
+    landing = client.get("/deals")
+    results = client.get("/deals?q=camera&sort=price_asc")
+    detail = client.get("/deals/ebay/v1%7C123%7C0")
+    analyzed = client.get(
+        "/deals/ebay/v1%7C123%7C0",
+        params={
+            "tax": "2",
+            "travel_cost": "0",
+            "other_acquisition_cost": "0",
+            "expected_resale": "100",
+            "selling_fees": "10",
+            "outbound_shipping": "8",
+            "other_selling_cost": "0",
+            "minimum_sale_days": "4",
+            "maximum_sale_days": "7",
+        },
+    )
+
+    assert landing.status_code == results.status_code == detail.status_code == 200
+    assert "Start with a deliberate search" in landing.text
+    assert "Used mirrorless camera" in results.text
+    assert "Needs resale estimate" in results.text
+    assert 'class="active" href="/deals"' in results.text
+    assert "Profit velocity" in detail.text and "Unavailable" in detail.text
+    assert "USD 20.00" in analyzed.text
+    assert "USD 2.86" in analyzed.text and "USD 5.00/day" in analyzed.text
+    assert "sold comparables" in analyzed.text
+
+
+def test_deal_acquisition_requires_actual_facts_and_uses_q_number(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(web_app, "_discovery", _Discovery)
+    missing = client.post(
+        "/deals/ebay/v1%7C123%7C0/acquire",
+        content="acquisition_cost=",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+        follow_redirects=False,
+    )
+    acquired = client.post(
+        "/deals/ebay/v1%7C123%7C0/acquire",
+        data={
+            "acquisition_cost": "47.25",
+            "acquired_at": "2026-09-17",
+            "acquisition_source": "eBay",
+        },
+        follow_redirects=False,
+    )
+    assert missing.status_code == acquired.status_code == 303
+    assert "Required" in missing.headers["location"]
+    assert acquired.headers["location"].startswith("/inventory/Q0001")
+    record = store.get("Q0001")
+    assert record.acquisition_cost == Decimal("47.25")
+    assert record.acquired_at == "2026-09-17"
+    assert record.marketplace_item_id == "v1|123|0"
+    assert record.acquisition_cost != Decimal("55")
+
+
+def test_deal_acquisition_rejects_cross_origin(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    response = client.post(
+        "/deals/ebay/v1%7C123%7C0/acquire",
+        data={"acquisition_cost": "1", "acquired_at": "2026-09-17", "acquisition_source": "x"},
+        headers={"origin": "https://attacker.example"},
+    )
+    assert response.status_code == 403

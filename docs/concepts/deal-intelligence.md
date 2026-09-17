@@ -15,7 +15,8 @@ model exists for it.
 
 The existing PC pipeline remains a specialization: its deterministic component parser, optional AI
 enrichment, heuristic pricing, and legacy score are unchanged. An adapter exposes known PC results
-as an Electronics opportunity. Vendor adapters and live Deals ingestion are not implemented.
+as an Electronics opportunity. The first live adapter now maps active eBay Browse results into this
+model; other sources and generalized sold-market evidence are not implemented.
 
 ## Categories and sources
 

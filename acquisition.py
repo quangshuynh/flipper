@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from inventory.store import InventoryRecord, InventoryStore
+from deals.models import DealOpportunity
 from models import DealEvaluation, Listing
 from parser.ai_enricher import enrich_specs_with_ai
 from parser.extractor import extract_specs
@@ -97,4 +98,27 @@ def acquire_from_analysis(
         estimated_roi=roi,
         deal_score=deal.score,
         pricing_method=analysis.pricing_method,
+    )
+
+
+def acquire_opportunity(
+    store: InventoryStore,
+    opportunity: DealOpportunity,
+    *,
+    acquisition_cost: str | Decimal,
+    acquired_at: str,
+    acquisition_source: str,
+    notes: str = "",
+) -> InventoryRecord:
+    """Cross the explicit boundary from an ephemeral opportunity into inventory."""
+    if not acquisition_source.strip():
+        raise ValueError("actual acquisition source is required")
+    return store.add(
+        title=opportunity.title,
+        source=acquisition_source,
+        acquired_at=acquired_at,
+        acquisition_cost=acquisition_cost,
+        notes=notes,
+        marketplace=opportunity.source.value,
+        marketplace_item_id=opportunity.source_listing_id,
     )
