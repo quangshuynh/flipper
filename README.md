@@ -1,6 +1,12 @@
-# Flipper
+<p align="center">
+  <img src="docs/images/flipper-logo.png" alt="flipper" width="256">
+</p>
 
-![Flipper logo](docs/images/flipper-logo2.png)
+<p align="center">
+  <a href="https://github.com/quangshuynh/flipper/actions/workflows/ci.yml"><img src="https://github.com/quangshuynh/flipper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
+</p>
 
 Flipper is a local-first resale intelligence and operations tool for evaluating opportunities,
 tracking acquired inventory, reconciling marketplace activity, and measuring realized results.
