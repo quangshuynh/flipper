@@ -19,9 +19,9 @@ Configuration comes from environment variables and optional `.env`; never commit
 | --- | --- |
 | `FLIPPER_INVENTORY_DB` | Web application's local SQLite path |
 | `FLIPPER_ATTACHMENT_ROOT` | Optional controlled attachment directory |
-| `OPENAI_API_KEY` | Optional analysis enrichment |
-| market-data variables | Optional asking-price lookup |
-| Discord webhook | Optional alerts |
+| `GROQ_API_KEY` | Optional Groq-compatible analysis enrichment |
+| `EBAY_OAUTH_TOKEN` | Optional legacy eBay asking-price lookup |
+| `DISCORD_WEBHOOK_URL` | Optional alerts |
 | `EBAY_SELLER_*` | Seller OAuth client, environment, and RuName |
 | account-deletion variables | eBay compliance endpoint verification |
 
