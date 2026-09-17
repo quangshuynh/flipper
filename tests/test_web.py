@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from keyring.errors import KeyringError
 
 from inventory.store import InventoryStore
+from inventory.attachments import AttachmentService
 from web.app import app
 
 
@@ -222,3 +223,41 @@ def test_compliance_route_coexists_with_dashboard(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert len(response.json()["challengeResponse"]) == 64
+
+
+def test_inventory_detail_and_controlled_attachment_serving(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    first = store.add(
+        title="Attached item",
+        source="sale",
+        acquired_at="2026-09-01",
+        acquisition_cost="10.00",
+    )
+    second = store.add(
+        title="Other item",
+        source="sale",
+        acquired_at="2026-09-02",
+        acquisition_cost="12.00",
+    )
+    photo = tmp_path / "private receipt photo.jpg"
+    photo.write_bytes(b"\xff\xd8\xffsynthetic-web-image")
+    attachment = AttachmentService(store).add(first.inventory_id, photo, category="receipt")
+
+    detail = client.get(f"/inventory/{first.inventory_id}")
+    served = client.get(f"/inventory/{first.inventory_id}/attachments/{attachment.attachment_id}")
+    wrong_owner = client.get(
+        f"/inventory/{second.inventory_id}/attachments/{attachment.attachment_id}"
+    )
+    unknown = client.get(f"/inventory/{first.inventory_id}/attachments/unknown")
+
+    assert detail.status_code == 200
+    assert "Attachments" in detail.text
+    assert "private receipt photo.jpg" in detail.text
+    assert str(tmp_path) not in detail.text
+    assert attachment.stored_filename not in detail.text
+    assert served.status_code == 200
+    assert served.content == photo.read_bytes()
+    assert served.headers["content-type"] == "image/jpeg"
+    assert served.headers["x-content-type-options"] == "nosniff"
+    assert wrong_owner.status_code == 404
+    assert unknown.status_code == 404

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import pass_context
 from dotenv import load_dotenv
@@ -20,7 +20,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ebay.compliance import app
 from ebay.seller_oauth import SellerOAuthConfig
-from inventory.store import InventoryNotFoundError, InventoryStore, SaleNotFoundError
+from inventory.attachments import AttachmentService
+from inventory.store import (
+    AttachmentNotFoundError,
+    AttachmentValidationError,
+    InventoryNotFoundError,
+    InventoryStore,
+    SaleNotFoundError,
+)
 from reports.service import (
     build_summary_report,
     inventory_report,
@@ -40,6 +47,11 @@ def _store() -> InventoryStore:
     store = InventoryStore(path)
     store.initialize()
     return store
+
+
+def _attachments(store: InventoryStore) -> AttachmentService:
+    configured = os.getenv("FLIPPER_ATTACHMENT_ROOT")
+    return AttachmentService(store, configured if configured else None)
 
 
 def _today() -> date:
@@ -212,6 +224,24 @@ def inventory_detail(request: Request, inventory_id: str):
             ),
             None,
         ),
+        attachments=_attachments(store).list(record.inventory_id),
+    )
+
+
+@app.get("/inventory/{inventory_id}/attachments/{attachment_id}", response_class=FileResponse)
+def inventory_attachment(inventory_id: str, attachment_id: str):
+    """Serve only a database-owned attachment resolved inside Flipper's local root."""
+    store = _store()
+    service = _attachments(store)
+    try:
+        attachment = store.get_attachment(attachment_id, inventory_id=inventory_id)
+        path = service.path_for(attachment)
+    except (AttachmentNotFoundError, AttachmentValidationError) as exc:
+        raise HTTPException(status_code=404, detail="Attachment not found") from exc
+    return FileResponse(
+        path,
+        media_type=attachment.media_type,
+        headers={"X-Content-Type-Options": "nosniff"},
     )
 
 
