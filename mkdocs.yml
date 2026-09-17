@@ -30,6 +30,7 @@ nav:
   - Deal Intelligence:
       - Overview & Economics: concepts/deal-intelligence.md
       - Evidence & Comparison: concepts/evidence-comparison.md
+      - Comparable Evidence: concepts/comparable-evidence.md
       - eBay Discovery: guides/ebay-discovery.md
       - PC Analysis: guides/analysis.md
   - Inventory:

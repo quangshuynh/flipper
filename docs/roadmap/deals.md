@@ -34,3 +34,10 @@ those tradeoffs; no global weighted score is used.
 Future design may consider a configured search region, distance, pickup time, acquisition travel
 cost, ability to acquire/list quickly, and local estate sales. This interval adds no precise-location
 request, location tracking, maps, or geocoding.
+
+## Comparable sources and local history
+
+Future permitted import adapters should target the typed comparable model and preserve source
+verification, event semantics, condition, currency, and observation time. Historical Flipper sales
+need normalized item attributes, category and sale-condition completeness, and defensible listing
+windows before similarity or recommendation work is credible.
