@@ -106,20 +106,25 @@ def test_shared_shell_brand_favicon_navigation_and_active_state(monkeypatch, tmp
     )
     assert '<img src="http://testserver/static/flipper-logo2.png"' in response.text
     assert 'aria-label="Primary"' in response.text
-    assert 'class="active" href="/inventory"' in response.text
+    assert 'class="active" href="/inventory" aria-current="page"' in response.text
     for path in (
         "/",
         "/deals",
+        "/deals/history",
         "/inventory",
         "/ebay/listings",
         "/sales",
-        "/analytics",
         "/insights",
-        "/analyze",
         "/settings",
     ):
         assert f'href="{path}"' in response.text
     assert "Deals" in response.text
+    assert 'href="/analytics"' not in response.text
+    assert 'href="/analyze"' not in response.text
+
+    history = client.get("/deals/history")
+    assert 'class="active" href="/deals/history" aria-current="page"' in history.text
+    assert 'class="active" href="/deals"' not in history.text
 
 
 def test_all_local_primary_pages_render_shared_shell(monkeypatch, tmp_path):
@@ -181,6 +186,9 @@ def test_populated_dashboard_inventory_and_details(monkeypatch, tmp_path):
     assert "Laptop 1" not in listing.text
     assert sale.sale_id in detail.text
     assert "Tested and clean" in detail.text
+    assert "Workflow" in dashboard.text
+    assert 'href="/deals/history"' in dashboard.text
+    assert 'href="/insights"' in dashboard.text
 
 
 def test_inventory_actual_sourcing_travel_web_flow_and_origin(monkeypatch, tmp_path):
@@ -1091,7 +1099,7 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
     assert linked.status_code == 303
     linked_detail = client.get(linked.headers["location"])
     assert item.inventory_id in linked_detail.text
-    assert "Acquired / outcome still in progress" in linked_detail.text
+    assert "Outcome in progress · Acquired" in linked_detail.text
     assert store.get(item.inventory_id).acquisition_cost == Decimal("18.00")
 
     store.transition_status(item.inventory_id, "listed")
@@ -1108,9 +1116,17 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
     )
     store.add_sale_cost(sale.sale_id, category="marketplace_fee", amount=Decimal("7.00"))
     realized = client.get(snapshot_path)
-    assert "Sold / realized outcome available" in realized.text
+    assert "Realized outcome" in realized.text
     assert "USD 70.00" in realized.text
     assert "Recorded realized profit" in realized.text
+    assert f'href="/sales/{sale.sale_id}"' in realized.text
+
+    inventory_detail = client.get(f"/inventory/{item.inventory_id}")
+    sale_detail = client.get(f"/sales/{sale.sale_id}")
+    assert f'href="{snapshot_path}"' in inventory_detail.text
+    assert "Open Decision vs. Outcome" in inventory_detail.text
+    assert f'href="{snapshot_path}"' in sale_detail.text
+    assert "Compare explicitly linked saved research" in sale_detail.text
 
 
 def test_snapshot_routes_reject_cross_origin_and_malformed_ids(monkeypatch, tmp_path):
@@ -1125,6 +1141,7 @@ def test_snapshot_routes_reject_cross_origin_and_malformed_ids(monkeypatch, tmp_
     assert rejected.status_code == 403
     assert missing.status_code == 404
     assert "No saved research yet" in empty.text
+    assert 'href="/deals"' in empty.text
 
 
 def test_ebay_snapshot_captures_normalized_api_facts_without_raw_secrets(monkeypatch, tmp_path):
