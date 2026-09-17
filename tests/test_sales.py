@@ -260,7 +260,7 @@ def test_v3_database_migrates_to_sales_schema(tmp_path):
     with sqlite3.connect(database) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,), (11,)]
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sales'"
         ).fetchone() == ("sales",)

@@ -26,6 +26,7 @@ Find the flip → Understand the economics → Acquire it → Track inventory
 - Reads eBay seller listings, orders, and Finances data through authorized APIs without marketplace writes.
 - Researches live eBay and user-entered multi-source opportunities, including local-trip economics,
   in an ephemeral Deals workspace.
+- Explicitly saves durable, historical research snapshots without turning estimates into accounting.
 - Presents local operational reports in a server-rendered web dashboard.
 
 Flipper is not a marketplace crawler, a complete accounting system, or an eBay listing manager.
