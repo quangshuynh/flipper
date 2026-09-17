@@ -1,0 +1,16 @@
+# Sales and recorded economics
+
+Imported sales retain minimized identity, exact scaled gross money, currency, quantity, and sale
+time. They exclude buyer PII. Exact re-import is a no-op; changed immutable data is a conflict.
+
+Sale cost components include marketplace fees, seller-paid shipping, refunds, other reductions,
+and supported credits/reversals. Manual components remain distinct from eBay Finances imports.
+Amounts are exact and must use the sale currency. Acquisition cost is USD, so Flipper withholds a
+profit result for non-USD sales rather than converting currency.
+
+Recorded realized profit is derived from gross proceeds, acquisition cost, and recorded components.
+It is not final merely because rows exist. Fees, shipping, refunds, and adjustments each require an
+explicit confirmation; the sale is incomplete, partially reconciled, or fully reconciled based on
+those confirmations. Payout-to-bank reconciliation and complete accounting remain out of scope.
+
+Use `python main.py sales --help` and `python main.py ebay import-finances --help` for commands.

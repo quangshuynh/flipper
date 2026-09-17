@@ -1,0 +1,43 @@
+site_name: Flipper
+site_description: Local-first resale intelligence and operations
+site_url: https://quangshuynh.github.io/flipper/
+repo_url: https://github.com/quangshuynh/flipper
+repo_name: quangshuynh/flipper
+strict: true
+theme:
+  name: material
+  logo: images/flipper-logo2.png
+  favicon: images/flipper-logo2.png
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+  palette:
+    primary: teal
+    accent: deep orange
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Guides:
+      - Analysis: guides/analysis.md
+      - Acquisition: guides/acquisition.md
+      - Inventory & attachments: guides/inventory-attachments.md
+      - eBay: guides/ebay.md
+      - Sales & accounting: guides/sales-accounting.md
+      - Reports & dashboard: guides/reports-dashboard.md
+  - Concepts:
+      - Q-numbers & lifecycle: concepts/q-numbers-lifecycle.md
+      - Valuations & money: concepts/valuations-money.md
+      - Reconciliation: concepts/reconciliation.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Configuration: reference/configuration.md
+  - Operations:
+      - Backup boundary: operations/backup-boundary.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Development:
+      - Architecture: development/architecture.md
+      - Testing & migrations: development/testing-migrations.md
+  - Roadmap:
+      - Deals: roadmap/deals.md

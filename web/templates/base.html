@@ -4,14 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · Flipper</title>
+  <meta name="theme-color" content="#152c2d">
+  <link rel="icon" type="image/png" href="{{ url_for('static', path='/flipper-logo2.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', path='/operational.css') }}">
 </head>
 <body>
   <a class="skip-link" href="#content">Skip to content</a>
   <div class="shell">
-    <aside>
-      <a class="brand" href="/">Flipper <small>Reseller operations</small></a>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Flipper dashboard">
+        <img src="{{ url_for('static', path='/flipper-logo2.png') }}" alt="" width="48" height="48">
+        <span>Flipper <small>Resale command center</small></span>
+      </a>
       <nav aria-label="Primary">
         <a class="{{ nav_class('dashboard') }}" href="/">Dashboard</a>
         <a class="{{ nav_class('inventory') }}" href="/inventory">Inventory</a>
@@ -21,10 +26,13 @@
         <a class="{{ nav_class('analyze') }}" href="/analyze">Analyze</a>
         <a class="{{ nav_class('settings') }}" href="/settings">Settings</a>
       </nav>
-      <p class="local-note">Local database is authoritative</p>
+      <div class="future-area" aria-label="Product direction">
+        <span>Next on the bench</span><strong>Deals</strong><small>Opportunity intelligence is in design.</small>
+      </div>
+      <p class="local-note"><span aria-hidden="true"></span> Local database is authoritative</p>
     </aside>
     <main id="content">
-      <header><div><p class="eyebrow">Flipper</p><h1>{{ title }}</h1></div>{% block actions %}{% endblock %}</header>
+      <header class="page-header"><div><p class="eyebrow">Resale operations</p><h1>{{ title }}</h1></div>{% block actions %}{% endblock %}</header>
       {% block content %}{% endblock %}
     </main>
   </div>
