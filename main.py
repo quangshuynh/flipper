@@ -9,10 +9,12 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from getpass import getpass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-from collectors.json_feed_collector import fetch_listings
+from acquisition import acquire_from_analysis, analyze_listing
+from collectors.json_feed_collector import DEFAULT_JSON_PATH, fetch_listings
 from ebay.finance_reconciliation import (
     FinanceMatchStatus,
     reconcile_finance_transactions,
@@ -38,11 +40,7 @@ from inventory.store import (
     SaleCostValidationError,
     ValuationValidationError,
 )
-from models import DealEvaluation
-from parser.ai_enricher import enrich_specs_with_ai
 from notifier.discord_notifier import send_deal_to_discord
-from parser.extractor import extract_specs
-from pricing.estimator import calculate_pricing_result, estimate_market_value, score_deal
 from reports.service import (
     build_summary_report,
     inventory_report,
@@ -51,7 +49,6 @@ from reports.service import (
 )
 from sales.economics import EconomicComponent, calculate_sale_economics
 from utils.dedupe import init_db, has_seen, mark_seen
-from utils.distance import compute_distance_miles
 
 
 EBAY_NOW_SAFETY_MARGIN = timedelta(minutes=5)
@@ -89,20 +86,12 @@ def run() -> None:
             print(f"Skipping seen listing: {listing.listing_id}")
             continue
 
-        base_specs = extract_specs(listing.title, listing.description)
+        analysis = analyze_listing(listing, home_lat=home_lat, home_lon=home_lon)
+        deal = analysis.deal
 
-        specs, ai_summary = enrich_specs_with_ai(
-            title=listing.title, description=listing.description, base_specs=base_specs
-        )
+        print(f"AI summary: {analysis.ai_summary}")
 
-        print(f"AI summary: {ai_summary}")
-
-        distance_miles = compute_distance_miles(
-            home_lat=home_lat,
-            home_lon=home_lon,
-            listing_lat=listing.latitude,
-            listing_lon=listing.longitude,
-        )
+        distance_miles = deal.distance_miles
 
         print(f"Distance: {distance_miles}")
 
@@ -114,42 +103,23 @@ def run() -> None:
             mark_seen(listing.listing_id)
             continue
 
-        estimated_value = estimate_market_value(specs)
-        pricing = calculate_pricing_result(estimated_value, listing.price)
-        score, profit = score_deal(
-            asking_price=listing.price,
-            estimated_value=estimated_value,
-            specs=specs,
-            distance_miles=distance_miles,
-        )
-        deal = DealEvaluation(
-            listing=listing,
-            specs=specs,
-            distance_miles=distance_miles,
-            estimated_market_value=estimated_value,
-            asking_price=listing.price,
-            ideal_buy_price=pricing.ideal_buy_price,
-            expected_resale_value=pricing.expected_resale_value,
-            estimated_gross_profit=profit,
-            estimated_roi=pricing.estimated_roi,
-            score=score,
-        )
         print(
             f"[{listing.listing_id}] listing_price=${listing.price:.2f}, "
-            f"estimated_value=${estimated_value:.2f}, ideal_buy=${pricing.ideal_buy_price:.2f}, "
-            f"expected_resale=${pricing.expected_resale_value:.2f}, gross_profit=${profit:.2f}, "
-            f"score={score}"
+            f"estimated_value=${deal.estimated_market_value:.2f}, "
+            f"ideal_buy=${deal.ideal_buy_price:.2f}, "
+            f"expected_resale=${deal.expected_resale_value:.2f}, "
+            f"gross_profit=${deal.estimated_gross_profit:.2f}, score={deal.score}"
         )
-        if profit >= min_profit and score >= min_score:
+        if deal.estimated_gross_profit >= min_profit and deal.score >= min_score:
             print(
-                f"Listing PASSED filters (profit {profit:.2f} >= {min_profit:.2f}, "
-                f"score {score} >= {min_score})"
+                f"Listing PASSED filters (profit {deal.estimated_gross_profit:.2f} "
+                f">= {min_profit:.2f}, score {deal.score} >= {min_score})"
             )
             if not webhook_url:
                 print("Alert skipped because Discord is not configured.")
                 continue
             success = send_deal_to_discord(
-                webhook_url=webhook_url, deal=deal, ai_summary=ai_summary
+                webhook_url=webhook_url, deal=deal, ai_summary=analysis.ai_summary
             )
             if success:
                 print(f"Sent deal alert for {listing.listing_id}")
@@ -159,8 +129,8 @@ def run() -> None:
                 print("Not marking as seen so it can retry next run.")
         else:
             print(
-                f"Listing FAILED filters (profit {profit:.2f} < {min_profit:.2f} "
-                f"or score {score} < {min_score})"
+                f"Listing FAILED filters (profit {deal.estimated_gross_profit:.2f} "
+                f"< {min_profit:.2f} or score {deal.score} < {min_score})"
             )
             mark_seen(listing.listing_id)
 
@@ -384,6 +354,18 @@ def _order_date_range(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Flipper resale analysis CLI")
     commands = parser.add_subparsers(dest="command")
+    acquire = commands.add_parser(
+        "acquire", help="explicitly analyze and record one exported listing as acquired"
+    )
+    acquire.add_argument("--listing-id", required=True)
+    acquire.add_argument("--feed", type=Path, default=DEFAULT_JSON_PATH)
+    acquire.add_argument("--cost", required=True, help="actual acquisition cost in USD")
+    acquire.add_argument(
+        "--acquired-at", required=True, help="actual acquisition date (YYYY-MM-DD)"
+    )
+    acquire.add_argument("--source", help="actual acquisition source; defaults to listing source")
+    acquire.add_argument("--notes", default="")
+    acquire.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     ebay = commands.add_parser("ebay", help="eBay seller integration")
     ebay_commands = ebay.add_subparsers(dest="ebay_command", required=True)
     ebay_commands.add_parser("connect", help="authorize a seller account")
@@ -511,6 +493,47 @@ def build_parser() -> argparse.ArgumentParser:
         )
     report_commands.add_parser("valuation", help="show baseline estimate accuracy")
     return parser
+
+
+def run_acquisition_command(args: argparse.Namespace) -> int:
+    """Analyze one selected exported listing and explicitly record its acquisition."""
+    try:
+        matches = [
+            listing
+            for listing in fetch_listings(args.feed)
+            if listing.listing_id == args.listing_id
+        ]
+        if not matches:
+            raise ValueError(f"listing {args.listing_id} was not found in {args.feed}")
+        if len(matches) != 1:
+            raise ValueError(f"listing ID {args.listing_id} is not unique in {args.feed}")
+        analysis = analyze_listing(
+            matches[0],
+            home_lat=float(os.getenv("HOME_LAT", "43.0831")),
+            home_lon=float(os.getenv("HOME_LON", "-77.6743")),
+        )
+        record = acquire_from_analysis(
+            InventoryStore(args.database),
+            analysis,
+            acquisition_cost=args.cost,
+            acquired_at=args.acquired_at,
+            acquisition_source=args.source,
+            notes=args.notes,
+        )
+        print(f"Acquired {record.inventory_id}: {record.title}")
+        print(f"Actual acquisition cost: ${record.acquisition_cost:.2f}")
+        print("Baseline valuation attached from the selected analysis.")
+        return 0
+    except (
+        FileNotFoundError,
+        ValueError,
+        InventoryValidationError,
+        ValuationValidationError,
+        RuntimeError,
+        sqlite3.Error,
+    ) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def run_inventory_command(args: argparse.Namespace) -> int:
@@ -1028,6 +1051,8 @@ def run_reports_command(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = build_parser().parse_args(argv)
+    if args.command == "acquire":
+        return run_acquisition_command(args)
     if args.command == "ebay":
         return run_ebay_command(args)
     if args.command == "inventory":
