@@ -24,7 +24,8 @@ Find the flip → Understand the economics → Acquire it → Track inventory
 - Creates durable Q-number inventory records from explicit acquisitions.
 - Tracks lifecycle, attachments, valuations, sales, costs, and reconciliation in local SQLite.
 - Reads eBay seller listings, orders, and Finances data through authorized APIs without marketplace writes.
-- Researches live eBay and user-entered multi-source opportunities in an ephemeral Deals workspace.
+- Researches live eBay and user-entered multi-source opportunities, including local-trip economics,
+  in an ephemeral Deals workspace.
 - Presents local operational reports in a server-rendered web dashboard.
 
 Flipper is not a marketplace crawler, a complete accounting system, or an eBay listing manager.

@@ -43,6 +43,7 @@ from deals.models import (
     TimeToSale,
 )
 from deals.research import EphemeralResearchStore
+from deals.travel import TripEstimate, trip_from_values
 from ebay.compliance import app
 from ebay.discovery import DiscoveryConfig, EbayDiscoveryClient, EbayDiscoveryError
 from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
@@ -167,7 +168,43 @@ def _taxonomy(client) -> tuple[dict[str, tuple[str, ...]], str]:
         return {}, getattr(getattr(client, "config", None), "marketplace_id", "EBAY_US")
 
 
-def _deal_analysis(opportunity, shipping, values: dict[str, str]) -> DealEvaluation:
+TRIP_VALUE_NAMES = (
+    "one_way_miles",
+    "vehicle_mpg",
+    "gas_price",
+    "additional_travel_cost",
+    "round_trip_minutes",
+)
+
+
+def _travel_analysis(values: dict[str, str], currency: str):
+    component_supplied = any(
+        values.get(name, "")
+        for name in ("one_way_miles", "vehicle_mpg", "gas_price", "additional_travel_cost")
+    )
+    if values.get("travel_cost", "") and component_supplied:
+        raise ValueError("direct travel cost cannot be combined with component trip assumptions")
+    trip = None
+    if component_supplied or values.get("round_trip_minutes", ""):
+        trip = trip_from_values(
+            currency=currency,
+            one_way_miles=values.get("one_way_miles", ""),
+            vehicle_mpg=values.get("vehicle_mpg", ""),
+            gas_price_per_gallon=values.get("gas_price", ""),
+            additional_travel_cost=values.get("additional_travel_cost", ""),
+            round_trip_minutes=values.get("round_trip_minutes", ""),
+        )
+    travel_cost = (
+        trip.total_travel_cost
+        if trip is not None and component_supplied
+        else _estimated(values.get("travel_cost", ""), currency)
+    )
+    return travel_cost, trip
+
+
+def _deal_analysis(
+    opportunity, shipping, values: dict[str, str]
+) -> tuple[DealEvaluation, TripEstimate | None]:
     if any(len(value) > 64 for value in values.values()):
         raise ValueError("assumption value is too long")
     minimum = values.get("minimum_sale_days", "")
@@ -178,11 +215,12 @@ def _deal_analysis(opportunity, shipping, values: dict[str, str]) -> DealEvaluat
             raise ValueError("both minimum and maximum sale days are required")
         time_to_sale = TimeToSale(int(minimum), int(maximum), "user estimate", USER_ASSUMPTION)
     currency = opportunity.base_price.currency
+    travel_cost, trip = _travel_analysis(values, currency)
     economics = calculate_economics(
         base_price=opportunity.base_price,
         acquisition_tax=_estimated(values.get("tax", ""), currency),
         inbound_shipping=shipping,
-        pickup_travel_cost=_estimated(values.get("travel_cost", ""), currency),
+        pickup_travel_cost=travel_cost,
         other_acquisition_cost=_estimated(values.get("other_acquisition_cost", ""), currency),
         expected_resale=_estimated(values.get("expected_resale", ""), currency),
         selling_fees=_estimated(values.get("selling_fees", ""), currency),
@@ -200,19 +238,22 @@ def _deal_analysis(opportunity, shipping, values: dict[str, str]) -> DealEvaluat
         risks.append(RiskFactor("unknown-inbound-shipping", "Inbound shipping is unknown."))
     if time_to_sale is None:
         risks.append(RiskFactor("unknown-time-to-sale", "Time-to-sale is unknown."))
-    return DealEvaluation(
-        economics=economics,
-        time_to_sale=time_to_sale,
-        confidence=ConfidenceEvidence(
-            category_match=(
-                EvidenceLevel.STRONG
-                if opportunity.category_provenance.label == "eBay Taxonomy ancestry"
-                else EvidenceLevel.WEAK
-                if opportunity.category_provenance.kind is ProvenanceKind.SOURCE_API
-                else None
-            )
+    return (
+        DealEvaluation(
+            economics=economics,
+            time_to_sale=time_to_sale,
+            confidence=ConfidenceEvidence(
+                category_match=(
+                    EvidenceLevel.STRONG
+                    if opportunity.category_provenance.label == "eBay Taxonomy ancestry"
+                    else EvidenceLevel.WEAK
+                    if opportunity.category_provenance.kind is ProvenanceKind.SOURCE_API
+                    else None
+                )
+            ),
+            risks=tuple(risks),
         ),
-        risks=tuple(risks),
+        trip,
     )
 
 
@@ -296,6 +337,49 @@ def _resolve_opportunity(request: Request, key: str):
         )
         return opportunity, shipping, None
     raise LookupError("opportunity was not found")
+
+
+def _render_deal_detail(
+    request,
+    *,
+    key,
+    opportunity,
+    shipping,
+    notes,
+    evaluation,
+    trip,
+    values,
+    trip_relevant,
+    status_code=200,
+):
+    evidence = research_store.evidence_set(_research_session(request), key, as_of=_today())
+    return _render(
+        request,
+        "deal_detail.html",
+        section="deals",
+        title="Deal analysis",
+        opportunity=opportunity,
+        shipping=shipping,
+        evaluation=evaluation,
+        values=values,
+        notes=notes,
+        opportunity_key=key,
+        detail_path=_opportunity_path(key),
+        source_label=(
+            "eBay API"
+            if key.startswith("ebay:")
+            else opportunity.source.value.replace("-", " ").title()
+        ),
+        trip=trip,
+        trip_relevant=trip_relevant,
+        research_rows=research_store.list(_research_session(request), key),
+        evidence=evidence,
+        comparable_types=ComparableType,
+        comparable_conditions=ComparableCondition,
+        source_identities=SourceIdentity,
+        today=_today().isoformat(),
+        status_code=status_code,
+    )
 
 
 def _comparable_from_fields(fields: dict[str, str], category: DealCategory) -> Comparable:
@@ -669,36 +753,42 @@ def manual_opportunity_detail(request: Request, opportunity_id: str):
     key = _manual_key(opportunity_id)
     try:
         opportunity, shipping, notes = _resolve_opportunity(request, key)
-        evaluation = _deal_analysis(opportunity, shipping, values)
-    except (LookupError, ValueError):
+    except LookupError:
         return _render(
             request,
             "error.html",
             section="deals",
             title="Opportunity unavailable",
-            message="This ephemeral opportunity was not found or an assumption was invalid.",
+            message="This ephemeral opportunity was not found.",
             status_code=404,
         )
-    evidence = research_store.evidence_set(_research_session(request), key, as_of=_today())
-    return _render(
+    try:
+        evaluation, trip = _deal_analysis(opportunity, shipping, values)
+    except ValueError as exc:
+        evaluation, trip = _deal_analysis(opportunity, shipping, {})
+        values["error_message"] = str(exc)
+        return _render_deal_detail(
+            request,
+            key=key,
+            opportunity=opportunity,
+            shipping=shipping,
+            notes=notes,
+            evaluation=evaluation,
+            trip=trip,
+            values=values,
+            trip_relevant=True,
+            status_code=400,
+        )
+    return _render_deal_detail(
         request,
-        "deal_detail.html",
-        section="deals",
-        title="Deal analysis",
+        key=key,
         opportunity=opportunity,
         shipping=shipping,
-        evaluation=evaluation,
-        values=values,
         notes=notes,
-        opportunity_key=key,
-        detail_path=_opportunity_path(key),
-        source_label=opportunity.source.value.replace("-", " ").title(),
-        research_rows=research_store.list(_research_session(request), key),
-        evidence=evidence,
-        comparable_types=ComparableType,
-        comparable_conditions=ComparableCondition,
-        source_identities=SourceIdentity,
-        today=_today().isoformat(),
+        evaluation=evaluation,
+        trip=trip,
+        values=values,
+        trip_relevant=True,
     )
 
 
@@ -713,7 +803,7 @@ def deal_detail(request: Request, item_id: str):
             category_ancestry=ancestry,
             marketplace_id=marketplace,
         )
-        evaluation = _deal_analysis(opportunity, shipping, values)
+        evaluation, trip = _deal_analysis(opportunity, shipping, values)
     except (EbayDiscoveryError, ValueError):
         return _render(
             request,
@@ -723,28 +813,16 @@ def deal_detail(request: Request, item_id: str):
             message="The eBay opportunity could not be loaded or an assumption was invalid.",
             status_code=503,
         )
-    evidence = research_store.evidence_set(
-        _research_session(request), _research_key(item_id), as_of=_today()
-    )
-    return _render(
+    return _render_deal_detail(
         request,
-        "deal_detail.html",
-        section="deals",
-        title="Deal analysis",
+        key=_research_key(item_id),
         opportunity=opportunity,
         shipping=shipping,
-        evaluation=evaluation,
-        values=values,
-        research_rows=research_store.list(_research_session(request), _research_key(item_id)),
-        evidence=evidence,
-        comparable_types=ComparableType,
-        comparable_conditions=ComparableCondition,
-        source_identities=SourceIdentity,
-        today=_today().isoformat(),
         notes=None,
-        opportunity_key=_research_key(item_id),
-        detail_path=f"/deals/ebay/{item_id}",
-        source_label="eBay API",
+        evaluation=evaluation,
+        trip=trip,
+        values=values,
+        trip_relevant=False,
     )
 
 
@@ -798,11 +876,12 @@ def deal_compare(request: Request):
                 "other_selling_cost",
                 "minimum_sale_days",
                 "maximum_sale_days",
+                *TRIP_VALUE_NAMES,
             )
         }
         try:
             opportunity, shipping, _ = _resolve_opportunity(request, opportunity_key)
-            evaluation = _deal_analysis(opportunity, shipping, values)
+            evaluation, trip = _deal_analysis(opportunity, shipping, values)
             evidence = research_store.evidence_set(
                 _research_session(request), opportunity_key, as_of=_today()
             )
@@ -813,6 +892,7 @@ def deal_compare(request: Request):
                     "opportunity": opportunity,
                     "shipping": shipping,
                     "evaluation": evaluation,
+                    "trip": trip,
                     "evidence": evidence,
                     "sold_summaries": evidence.summaries(ComparableType.SOLD),
                     "active_summaries": evidence.summaries(ComparableType.ACTIVE_ASKING),

@@ -61,6 +61,35 @@ expected ROI = expected net profit / landed acquisition cost
 capital tied up = landed acquisition cost
 ```
 
+## Local trip economics
+
+For an in-person opportunity, Deals can decompose the existing travel component from explicit
+assumptions:
+
+```text
+round-trip miles = one-way miles × 2
+estimated gallons = round-trip miles / vehicle MPG
+estimated fuel cost = estimated gallons × gas price per gallon
+total modeled travel cost = estimated fuel cost + additional direct travel expense
+```
+
+One-way distance is always labeled explicitly; Flipper never guesses whether mileage is one-way or
+round-trip. Distance, MPG, gas price, additional expense, and round-trip travel minutes are user
+assumptions. Round-trip miles, gallons, fuel cost, and total travel cost are Flipper calculations.
+The total enters the existing landed-cost calculation exactly once.
+
+Intermediate Decimal values retain their precision. Currency display rounds to the normal two-place
+money presentation; the calculation does not round fuel or cost early. Gas price is manually entered,
+not live or verified. Missing MPG or another required fuel input leaves fuel and total travel cost
+unknown rather than treating fuel as free.
+
+Travel time is sourcing-effort context. It is not time-to-sale and is not converted to wages or an
+opportunity cost. Flipper performs no geocoding, routing, traffic lookup, GPS tracking, gas-price
+lookup, or external request from trip inputs.
+
+The older direct travel-cost input remains available as an alternative. It cannot be combined with
+distance/MPG/gas/additional-expense components, preventing double-counting.
+
 Tax is only source- or user-supplied. Inbound and outbound shipping remain distinct. Fee amounts are
 explicit inputs rather than a universal marketplace percentage. Expected values never become
 realized accounting entries. A zero-cost opportunity has an explicit ROI state, never infinity.
@@ -96,6 +125,8 @@ This calculates a synthetic opportunity and writes nothing to inventory:
 ```bash
 python main.py deals analyze --title "Test opportunity" --source local \
   --category electronics --base-price 55 --expected-resale 95 \
+  --one-way-distance 12 --vehicle-mpg 28 --gas-price 3.45 \
+  --additional-travel-cost 2 --travel-minutes 40 \
   --minimum-sale-days 4 --maximum-sale-days 7
 ```
 

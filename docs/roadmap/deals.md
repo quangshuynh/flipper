@@ -10,6 +10,11 @@ Both paths normalize into the same deal model and use the same exact-Decimal eco
 evidence, pairwise/Pareto comparison, and explicit acquisition workflow. Flipper does not calculate
 an overall numeric winner.
 
+Local-capable manual opportunities can model a trip from one-way mileage, vehicle MPG, manually
+entered gas price, additional direct expense, and optional round-trip travel minutes. Derived fuel
+and total travel cost feed landed cost once and remain research estimates. No map, route, location,
+traffic, or gas-price service is contacted.
+
 ## Live eBay discovery
 
 Discovery uses application OAuth and the configured Sandbox or Production Browse host. It searches
@@ -57,7 +62,9 @@ tradeoffs; they are not rankings or purchase recommendations.
 
 Research becomes inventory only after **I bought this** is submitted with actual acquisition cost,
 date, and source. Asking price, research date, estimated shipping, and expected resale never replace
-those authoritative facts. Successful acquisition uses the existing transactional Q-number allocator.
+those authoritative facts. Estimated fuel, mileage, travel time, and total travel cost also remain
+research context; they do not become actual inventory or accounting expenses. Successful acquisition
+uses the existing transactional Q-number allocator.
 
 Future intervals may add local-sourcing intelligence, durable research history, and
 decision-versus-outcome analysis. They are not part of the current workspace.
