@@ -1,8 +1,8 @@
 # Generalized Deals direction
 
-Deals is planned as a first-class opportunity workspace. It is not implemented, and the application
-does not expose a dead Deals route. The current PC analyzer remains supported while its evidence and
-data model are audited for broader use.
+The source-neutral deal model and ephemeral economics/comparison core are implemented. A first-class
+Deals web workspace and vendor ingestion are still planned; the application does not expose a dead
+Deals route. The current PC analyzer remains supported as an Electronics specialization.
 
 ## Candidate categories
 
@@ -18,16 +18,16 @@ local opportunities, and other permitted feeds/vendors. A name here is not a pro
 support. Adapters must use suitable official APIs, permitted feeds/exports, or user-provided data;
 brittle or prohibited crawling is not the architecture.
 
-## Economics to investigate
+## Economics foundation
 
-Future analysis should distinguish base purchase price, estimated tax, inbound shipping,
+The core distinguishes base purchase price, estimated tax, inbound shipping,
 pickup/travel cost, selling fees, outbound shipping, expected resale proceeds, expected net profit,
 ROI, capital tied up, market liquidity, estimated time-to-sale, sell-through evidence, profit
 velocity, condition uncertainty, comparable-sale quality, confidence, and downside risk.
 
 A deal expected to make approximately $80 but require weeks to sell is not automatically superior
-to one expected to make approximately $40 that can reliably turn over in days. No scoring formula or
-arbitrary weights are chosen yet; evidence and the data model must come first.
+to one expected to make approximately $40 that can reliably turn over in days. Comparison preserves
+those tradeoffs; no global weighted score is used.
 
 ## Local opportunities
 

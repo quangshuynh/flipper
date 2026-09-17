@@ -13,9 +13,14 @@ theme:
     - navigation.indexes
     - navigation.top
     - content.code.copy
+    - search.highlight
+    - search.suggest
   palette:
-    primary: teal
-    accent: deep orange
+    scheme: slate
+    primary: custom
+    accent: custom
+extra_css:
+  - stylesheets/extra.css
 nav:
   - Home: index.md
   - Getting started: getting-started.md
@@ -27,6 +32,7 @@ nav:
       - Sales & accounting: guides/sales-accounting.md
       - Reports & dashboard: guides/reports-dashboard.md
   - Concepts:
+      - Deal intelligence: concepts/deal-intelligence.md
       - Q-numbers & lifecycle: concepts/q-numbers-lifecycle.md
       - Valuations & money: concepts/valuations-money.md
       - Reconciliation: concepts/reconciliation.md

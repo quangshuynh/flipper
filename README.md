@@ -4,8 +4,8 @@
 
 Flipper is a local-first resale intelligence and operations tool for evaluating opportunities,
 tracking acquired inventory, reconciling marketplace activity, and measuring realized results.
-Its current analyzer began with exported secondhand-computer listings; broader category and source
-intelligence is future direction, not a current integration.
+Its current analyzer began with exported secondhand-computer listings. The generalized core can now
+model manual opportunities across categories; vendor ingestion remains future work.
 
 ```text
 Find the flip → Understand the economics → Acquire it → Track inventory
