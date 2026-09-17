@@ -1,6 +1,7 @@
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from keyring.errors import KeyringError
 
 from ebay.seller_oauth import (
     FINANCES_SCOPE,
@@ -128,3 +129,50 @@ def test_failed_exchange_does_not_leak_code_or_secret():
     message = str(error.value)
     assert "authorization-secret" not in message
     assert "secret" not in message
+
+
+@pytest.mark.parametrize("environment", ["production", "sandbox"])
+def test_connection_status_uses_selected_environment_and_credential_namespace(
+    monkeypatch, environment
+):
+    monkeypatch.setenv("EBAY_SELLER_ENV", environment)
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("EBAY_SELLER_RUNAME", "runame")
+    store = Store()
+    store.set_password(f"flipper.ebay.seller.{environment}", "client", "refresh")
+
+    status = SellerOAuthConfig.connection_status_from_environment(store)
+
+    assert status.environment == environment
+    assert status.configured is True
+    assert status.connected is True
+
+
+def test_connection_status_distinguishes_missing_token_and_configuration(monkeypatch):
+    monkeypatch.setenv("EBAY_SELLER_ENV", "production")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("EBAY_SELLER_RUNAME", "runame")
+    assert SellerOAuthConfig.connection_status_from_environment(Store()).connected is False
+
+    monkeypatch.delenv("EBAY_SELLER_RUNAME", raising=False)
+    status = SellerOAuthConfig.connection_status_from_environment(Store())
+    assert status.configured is False
+    assert status.connected is False
+
+
+def test_connection_status_handles_credential_store_failure(monkeypatch):
+    class FailingStore(Store):
+        def get_password(self, service, username):
+            raise KeyringError("synthetic credential failure")
+
+    monkeypatch.setenv("EBAY_SELLER_ENV", "production")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_SELLER_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("EBAY_SELLER_RUNAME", "runame")
+
+    status = SellerOAuthConfig.connection_status_from_environment(FailingStore())
+
+    assert status.configured is True
+    assert status.connected is None

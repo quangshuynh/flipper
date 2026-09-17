@@ -9,17 +9,17 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-import keyring
 from fastapi import HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import pass_context
-from keyring.errors import KeyringError
+from dotenv import load_dotenv
 from starlette.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ebay.compliance import app
+from ebay.seller_oauth import SellerOAuthConfig
 from inventory.store import InventoryNotFoundError, InventoryStore, SaleNotFoundError
 from reports.service import (
     build_summary_report,
@@ -30,6 +30,7 @@ from reports.service import (
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATABASE = ROOT / "data" / "flipper_inventory.db"
+load_dotenv(ROOT / ".env")
 templates = Jinja2Templates(directory=ROOT / "web" / "templates")
 app.mount("/static", StaticFiles(directory=ROOT / "web" / "static"), name="static")
 
@@ -289,22 +290,6 @@ def analyze_page(request: Request):
     return _render(request, "analyze.html", section="analyze", title="Analyze")
 
 
-def _ebay_status() -> dict[str, object]:
-    environment = os.getenv("EBAY_SELLER_ENV", "production").strip().lower()
-    client_id = os.getenv("EBAY_SELLER_CLIENT_ID", "").strip()
-    configured = all(
-        os.getenv(name, "").strip()
-        for name in ("EBAY_SELLER_CLIENT_ID", "EBAY_SELLER_CLIENT_SECRET", "EBAY_SELLER_RUNAME")
-    )
-    connected: bool | None = False
-    if client_id:
-        try:
-            connected = bool(keyring.get_password(f"flipper.ebay.seller.{environment}", client_id))
-        except KeyringError:
-            connected = None
-    return {"environment": environment, "configured": configured, "connected": connected}
-
-
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
     return _render(
@@ -312,5 +297,5 @@ def settings_page(request: Request):
         "settings.html",
         section="settings",
         title="Integrations / Settings",
-        ebay=_ebay_status(),
+        ebay=SellerOAuthConfig.connection_status_from_environment(),
     )

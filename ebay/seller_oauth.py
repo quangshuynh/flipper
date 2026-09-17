@@ -37,6 +37,15 @@ class CredentialStore(Protocol):
 
 
 @dataclass(frozen=True)
+class SellerConnectionStatus:
+    """Safe local status metadata for the selected seller environment."""
+
+    environment: str
+    configured: bool
+    connected: bool | None
+
+
+@dataclass(frozen=True)
 class SellerOAuthConfig:
     """Environment-specific eBay seller OAuth settings."""
 
@@ -45,16 +54,21 @@ class SellerOAuthConfig:
     client_secret: str
     runame: str
 
+    @staticmethod
+    def selected_environment() -> str:
+        environment = os.getenv("EBAY_SELLER_ENV", "production").strip().lower()
+        if environment not in {"production", "sandbox"}:
+            raise SellerOAuthError("EBAY_SELLER_ENV must be 'production' or 'sandbox'")
+        return environment
+
     @classmethod
     def from_environment(cls) -> SellerOAuthConfig:
-        environment = os.getenv("EBAY_SELLER_ENV", "production").strip().lower()
+        environment = cls.selected_environment()
         values = {
             "client_id": os.getenv("EBAY_SELLER_CLIENT_ID", "").strip(),
             "client_secret": os.getenv("EBAY_SELLER_CLIENT_SECRET", "").strip(),
             "runame": os.getenv("EBAY_SELLER_RUNAME", "").strip(),
         }
-        if environment not in {"production", "sandbox"}:
-            raise SellerOAuthError("EBAY_SELLER_ENV must be 'production' or 'sandbox'")
         missing = [name for name, value in values.items() if not value]
         if missing:
             names = ", ".join(f"EBAY_SELLER_{name.upper()}" for name in missing)
@@ -68,6 +82,43 @@ class SellerOAuthConfig:
     @property
     def auth_host(self) -> str:
         return "auth.ebay.com" if self.environment == "production" else "auth.sandbox.ebay.com"
+
+    @property
+    def credential_service(self) -> str:
+        return f"flipper.ebay.seller.{self.environment}"
+
+    def connection_status(
+        self, credential_store: CredentialStore = keyring
+    ) -> SellerConnectionStatus:
+        """Inspect local authorization without exposing or refreshing its credential."""
+        try:
+            connected = bool(credential_store.get_password(self.credential_service, self.client_id))
+        except KeyringError:
+            connected = None
+        return SellerConnectionStatus(
+            environment=self.environment,
+            configured=True,
+            connected=connected,
+        )
+
+    @classmethod
+    def connection_status_from_environment(
+        cls, credential_store: CredentialStore = keyring
+    ) -> SellerConnectionStatus:
+        """Return safe configuration and credential-presence metadata."""
+        try:
+            environment = cls.selected_environment()
+        except SellerOAuthError:
+            return SellerConnectionStatus(
+                environment="unavailable", configured=False, connected=False
+            )
+        try:
+            config = cls.from_environment()
+        except SellerOAuthError:
+            return SellerConnectionStatus(
+                environment=environment, configured=False, connected=False
+            )
+        return config.connection_status(credential_store)
 
 
 class SellerOAuthClient:
@@ -90,7 +141,7 @@ class SellerOAuthClient:
 
     @property
     def _service(self) -> str:
-        return f"flipper.ebay.seller.{self.config.environment}"
+        return self.config.credential_service
 
     @property
     def _token_url(self) -> str:
