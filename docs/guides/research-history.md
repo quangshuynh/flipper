@@ -25,6 +25,16 @@ acquisition cost, expenses, or sale proceeds. A snapshot may be explicitly linke
 inventory Q-number, but inventory remains authoritative and independent; linking copies no estimated
 money into accounting.
 
+For an explicitly linked Q-number, **Decision vs. Outcome** compares compatible facts per decision.
+Expected values come only from the saved historical snapshot; actual values come from authoritative
+inventory and recorded sale accounting. Recorded fees, shipping, refunds, adjustments, and credits
+are included once through the existing accounting calculation. Missing data remains unknown, while
+a known zero remains zero.
+
+Variance is actual minus expected (ROI uses percentage points). It is descriptive, not a score,
+success label, or recommendation. Snapshots are never rewritten or recomputed when working research
+or formulas change. Modeled travel remains expected research; actual travel comparison is deferred.
+
 Research history is stored in the selected local inventory SQLite database. Schema version 11 adds
 a snapshot header plus a validated, canonical, versioned JSON payload. The header supports bounded
 history queries and an optional inventory foreign key; the payload preserves the historical
@@ -33,6 +43,5 @@ read, and unsupported or malformed payloads fail safely. The migration is forwar
 Flipper's normal ordered migration process; back up the database before upgrading because automatic
 downgrade is not supported.
 
-Snapshot deletion, editing captured content, CLI snapshot creation, bulk export, and expected-vs-
-actual outcome analysis are deferred. Use **Deals → Research History** to list and inspect saved
-records.
+Snapshot deletion, editing captured content, CLI snapshot creation, and bulk export are deferred.
+Use **Deals → Research History** to list and inspect saved records.

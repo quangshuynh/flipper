@@ -30,6 +30,7 @@ from deals.comparables import (
 from deals.ebay import EBAY_CATEGORY_MAP, normalize_ebay_item, normalize_search_results
 from deals.economics import calculate_economics
 from deals.manual import MANUAL_CONDITIONS, create_manual_opportunity
+from deals.outcomes import build_decision_outcome
 from deals.evaluation import ComparisonResult, DealEvaluation, compare
 from deals.models import (
     ConfidenceEvidence,
@@ -975,8 +976,9 @@ def research_history(request: Request):
 
 @app.get("/deals/history/{snapshot_id}", response_class=HTMLResponse)
 def research_snapshot_detail(request: Request, snapshot_id: str):
+    store = _store()
     try:
-        snapshot = _store().get_research_snapshot(snapshot_id)
+        snapshot = store.get_research_snapshot(snapshot_id)
     except (ResearchSnapshotNotFoundError, SnapshotPayloadError):
         return _render(
             request,
@@ -993,6 +995,7 @@ def research_snapshot_detail(request: Request, snapshot_id: str):
         title="Saved research snapshot",
         snapshot=snapshot,
         payload=snapshot.payload,
+        outcome=build_decision_outcome(store, snapshot, today=_today()),
     )
 
 

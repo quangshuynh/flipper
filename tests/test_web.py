@@ -1010,6 +1010,8 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
     assert len(store.list_research_snapshots()) == 1
     assert detail.status_code == history.status_code == 200
     assert "Saved research snapshot" in detail.text
+    assert "Decision vs. Outcome" in detail.text
+    assert "No actual outcome is available" in detail.text
     assert "Asking price at snapshot" in detail.text and "USD 20.25" in detail.text
     assert "Sold" in detail.text and "Active Asking" in detail.text
     assert "20 miles" in detail.text and "45 minutes" in detail.text
@@ -1030,8 +1032,28 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
         f"{snapshot_path}/link", data={"inventory_id": item.inventory_id}, follow_redirects=False
     )
     assert linked.status_code == 303
-    assert item.inventory_id in client.get(linked.headers["location"]).text
+    linked_detail = client.get(linked.headers["location"])
+    assert item.inventory_id in linked_detail.text
+    assert "Acquired / outcome still in progress" in linked_detail.text
     assert store.get(item.inventory_id).acquisition_cost == Decimal("18.00")
+
+    store.transition_status(item.inventory_id, "listed")
+    sale, _ = store.import_sale(
+        inventory_id=item.inventory_id,
+        marketplace="ebay",
+        external_order_id="snapshot-order",
+        external_line_item_id="snapshot-line",
+        marketplace_sku=item.inventory_id,
+        quantity=1,
+        gross_amount=Decimal("70.00"),
+        currency="USD",
+        sold_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    store.add_sale_cost(sale.sale_id, category="marketplace_fee", amount=Decimal("7.00"))
+    realized = client.get(snapshot_path)
+    assert "Sold / realized outcome available" in realized.text
+    assert "USD 70.00" in realized.text
+    assert "Recorded realized profit" in realized.text
 
 
 def test_snapshot_routes_reject_cross_origin_and_malformed_ids(monkeypatch, tmp_path):
