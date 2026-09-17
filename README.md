@@ -426,10 +426,11 @@ raw API response, credential, buyer detail, or address is retained.
 For compatible currencies, resale error is actual gross minus estimated resale; absolute error is
 its magnitude; percentage error is resale error divided by estimated resale and is unavailable for
 a zero estimate. Recorded actual profit remains explicitly incomplete until all four economics
-categories are confirmed. Profit error is calculated only from fully reconciled actual profit
-minus estimated gross profit; recorded incomplete profit is displayed separately and is never
-called final. Unsold items and currency mismatches have no comparison, and Flipper performs no
-currency conversion.
+categories are confirmed. The current estimated profit is gross resale minus asking price, while
+actual realized profit includes acquisition cost and recorded sale components, so profit error is
+explicitly unavailable rather than comparing unlike measures. Recorded incomplete profit is shown
+separately and is never called final. Unsold items and currency mismatches have no comparison, and
+Flipper performs no currency conversion.
 
 Analytics show the individual comparison when only one item is comparable. Multiple compatible
 items receive restrained aggregates; monetary aggregates are unavailable across mixed currencies,

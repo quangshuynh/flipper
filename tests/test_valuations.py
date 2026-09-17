@@ -123,7 +123,7 @@ def test_comparison_math_zero_denominator_currency_and_profit_semantics():
     assert positive.resale_error == Decimal("10")
     assert positive.absolute_resale_error == Decimal("10")
     assert positive.resale_percentage_error == Decimal("0.1")
-    assert positive.profit_error == Decimal("10")
+    assert positive.profit_error is None
     negative = compare_valuation_to_sale(
         estimated_resale=Decimal("100"),
         estimated_profit=None,
@@ -178,7 +178,7 @@ def test_reports_unsold_incomplete_and_fully_reconciled(tmp_path):
     complete = valuation_accuracy_report(store)
     sold_row = next(row for row in complete.rows if row.sale is not None)
     assert sold_row.comparison.fully_reconciled_actual_profit == Decimal("70.1")
-    assert sold_row.comparison.profit_error == Decimal("15.55")
+    assert sold_row.comparison.profit_error is None
 
 
 def test_multiple_comparisons_have_exact_aggregates_and_mixed_money_is_unavailable(tmp_path):

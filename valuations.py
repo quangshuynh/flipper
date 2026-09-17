@@ -39,13 +39,6 @@ def compare_valuation_to_sale(
     error = actual_gross - estimated_resale
     percentage = error / estimated_resale if estimated_resale > 0 else None
     fully_reconciled_profit = recorded_actual_profit if fully_reconciled else None
-    actual_for_error = fully_reconciled_profit
-    basis = "fully_reconciled" if actual_for_error is not None else None
-    profit_error = (
-        actual_for_error - estimated_profit
-        if actual_for_error is not None and estimated_profit is not None
-        else None
-    )
     return ValuationComparison(
         estimated_resale=estimated_resale,
         actual_gross=actual_gross,
@@ -55,7 +48,7 @@ def compare_valuation_to_sale(
         estimated_profit=estimated_profit,
         recorded_actual_profit=recorded_actual_profit,
         fully_reconciled_actual_profit=fully_reconciled_profit,
-        profit_error=profit_error,
-        profit_comparison_basis=basis,
+        profit_error=None,
+        profit_comparison_basis=None,
         currency=estimate_currency,
     )

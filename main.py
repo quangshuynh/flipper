@@ -974,7 +974,7 @@ def _print_valuation_report(report) -> None:
             )
             print(
                 f"  fully reconciled actual profit: {reconciled_profit} | "
-                f"profit error: {_report_money(comparison.currency, comparison.profit_error)}"
+                "profit error: unavailable (gross estimate is not comparable)"
             )
         elif comparison.recorded_actual_profit is not None:
             print(
