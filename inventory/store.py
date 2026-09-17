@@ -630,30 +630,102 @@ class InventoryStore:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            next_value = connection.execute(
-                "SELECT last_value + 1 FROM inventory_id_sequence WHERE singleton = 1"
-            ).fetchone()[0]
-            inventory_id = f"Q{next_value:04d}"
-            cursor = connection.execute(
-                """INSERT INTO inventory_items (
-                    inventory_id, title, source, acquired_at, acquisition_cost_cents,
-                    quantity, notes, status, marketplace, marketplace_item_id, marketplace_sku
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (inventory_id, *values.values()),
-            )
-            connection.execute(
-                "UPDATE inventory_id_sequence SET last_value = ? WHERE singleton = 1",
-                (next_value,),
-            )
+            inventory_id, _ = self._insert_inventory(connection, values)
             connection.commit()
-            internal_id = cursor.lastrowid
-            assert internal_id is not None
             return self.get(inventory_id)
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _insert_inventory(
+        connection: sqlite3.Connection, values: dict[str, object]
+    ) -> tuple[str, int]:
+        """Allocate and insert one Q-number inside the caller's transaction."""
+        next_value = connection.execute(
+            "SELECT last_value + 1 FROM inventory_id_sequence WHERE singleton = 1"
+        ).fetchone()[0]
+        inventory_id = f"Q{next_value:04d}"
+        cursor = connection.execute(
+            """INSERT INTO inventory_items (
+                inventory_id, title, source, acquired_at, acquisition_cost_cents,
+                quantity, notes, status, marketplace, marketplace_item_id, marketplace_sku
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (inventory_id, *values.values()),
+        )
+        connection.execute(
+            "UPDATE inventory_id_sequence SET last_value = ? WHERE singleton = 1",
+            (next_value,),
+        )
+        internal_id = cursor.lastrowid
+        assert internal_id is not None
+        return inventory_id, internal_id
+
+    def acquire_with_valuation(
+        self,
+        *,
+        title: str,
+        source: str,
+        acquired_at: str,
+        acquisition_cost: str | Decimal,
+        analyzed_at: datetime,
+        currency: str,
+        estimated_market_value: Decimal,
+        expected_resale_value: Decimal,
+        asking_price: Decimal,
+        ideal_buy_price: Decimal,
+        estimated_gross_profit: Decimal,
+        estimated_roi: Decimal | None,
+        deal_score: int,
+        pricing_method: str | None = None,
+        quantity: int = 1,
+        notes: str = "",
+        marketplace: str | None = None,
+        marketplace_item_id: str | None = None,
+        marketplace_sku: str | None = None,
+    ) -> InventoryRecord:
+        """Create one acquired Q-number and its baseline valuation atomically."""
+        item_values = self._validate_values(
+            title=title,
+            source=source,
+            acquired_at=acquired_at,
+            acquisition_cost=acquisition_cost,
+            quantity=quantity,
+            notes=notes,
+            status="acquired",
+            marketplace=marketplace,
+            marketplace_item_id=marketplace_item_id,
+            marketplace_sku=marketplace_sku,
+        )
+        valuation_values = self._validate_valuation_values(
+            analyzed_at=analyzed_at,
+            currency=currency,
+            estimated_market_value=estimated_market_value,
+            expected_resale_value=expected_resale_value,
+            asking_price=asking_price,
+            ideal_buy_price=ideal_buy_price,
+            estimated_gross_profit=estimated_gross_profit,
+            estimated_roi=estimated_roi,
+            deal_score=deal_score,
+            pricing_method=pricing_method,
+        )
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            inventory_id, internal_id = self._insert_inventory(connection, item_values)
+            self._insert_valuation_snapshot(
+                connection, internal_id, valuation_values, is_baseline=True
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get(inventory_id)
 
     def update(
         self,
@@ -1312,6 +1384,84 @@ class InventoryStore:
             raise ValuationValidationError(f"{name} has unsupported precision")
         return int(normalized.scaleb(scale)), scale
 
+    def _validate_valuation_values(
+        self,
+        *,
+        analyzed_at: datetime,
+        currency: str,
+        estimated_market_value: Decimal,
+        expected_resale_value: Decimal,
+        asking_price: Decimal,
+        ideal_buy_price: Decimal,
+        estimated_gross_profit: Decimal,
+        estimated_roi: Decimal | None,
+        deal_score: int,
+        pricing_method: str | None,
+    ) -> dict[str, object]:
+        try:
+            timestamp = self._timestamp(analyzed_at, "analysis timestamp")
+        except SaleImportError as exc:
+            raise ValuationValidationError(str(exc)) from exc
+        currency = self._required(currency, "currency").upper()
+        if len(currency) != 3 or not currency.isalpha():
+            raise ValuationValidationError("currency must be a three-letter code")
+        if isinstance(deal_score, bool) or not isinstance(deal_score, int):
+            raise ValuationValidationError("deal score must be an integer")
+        if estimated_roi is not None and (
+            not isinstance(estimated_roi, Decimal) or not estimated_roi.is_finite()
+        ):
+            raise ValuationValidationError("estimated ROI must be a finite decimal")
+        amounts: list[int] = []
+        for value, name, nonnegative in (
+            (estimated_market_value, "estimated market value", True),
+            (expected_resale_value, "expected resale value", True),
+            (asking_price, "asking price", True),
+            (ideal_buy_price, "ideal buy price", True),
+            (estimated_gross_profit, "estimated gross profit", False),
+        ):
+            amounts.extend(self._valuation_amount(value, name, nonnegative=nonnegative))
+        return {
+            "timestamp": timestamp,
+            "currency": currency,
+            "amounts": amounts,
+            "estimated_roi": str(estimated_roi) if estimated_roi is not None else None,
+            "deal_score": deal_score,
+            "pricing_method": self._optional(pricing_method),
+        }
+
+    def _insert_valuation_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        inventory_internal_id: int,
+        values: dict[str, object],
+        *,
+        is_baseline: bool,
+    ) -> int:
+        cursor = connection.execute(
+            """INSERT INTO valuation_snapshots (
+                inventory_internal_id, analyzed_at, currency,
+                estimated_market_value_minor, estimated_market_value_scale,
+                expected_resale_value_minor, expected_resale_value_scale,
+                asking_price_minor, asking_price_scale,
+                ideal_buy_price_minor, ideal_buy_price_scale,
+                estimated_gross_profit_minor, estimated_gross_profit_scale,
+                estimated_roi, deal_score, pricing_method, is_baseline
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                inventory_internal_id,
+                values["timestamp"],
+                values["currency"],
+                *values["amounts"],
+                values["estimated_roi"],
+                values["deal_score"],
+                values["pricing_method"],
+                int(is_baseline),
+            ),
+        )
+        snapshot_id = cursor.lastrowid
+        assert snapshot_id is not None
+        return snapshot_id
+
     def add_valuation_snapshot(
         self,
         inventory_id: str,
@@ -1328,29 +1478,18 @@ class InventoryStore:
         pricing_method: str | None = None,
     ) -> ValuationSnapshot:
         """Append an immutable snapshot; the first snapshot is the baseline."""
-        try:
-            timestamp = self._timestamp(analyzed_at, "analysis timestamp")
-        except SaleImportError as exc:
-            raise ValuationValidationError(str(exc)) from exc
-        currency = self._required(currency, "currency").upper()
-        if len(currency) != 3 or not currency.isalpha():
-            raise ValuationValidationError("currency must be a three-letter code")
-        if isinstance(deal_score, bool) or not isinstance(deal_score, int):
-            raise ValuationValidationError("deal score must be an integer")
-        if estimated_roi is not None and (
-            not isinstance(estimated_roi, Decimal) or not estimated_roi.is_finite()
-        ):
-            raise ValuationValidationError("estimated ROI must be a finite decimal")
-        method = self._optional(pricing_method)
-        values = []
-        for value, name, nonnegative in (
-            (estimated_market_value, "estimated market value", True),
-            (expected_resale_value, "expected resale value", True),
-            (asking_price, "asking price", True),
-            (ideal_buy_price, "ideal buy price", True),
-            (estimated_gross_profit, "estimated gross profit", False),
-        ):
-            values.extend(self._valuation_amount(value, name, nonnegative=nonnegative))
+        values = self._validate_valuation_values(
+            analyzed_at=analyzed_at,
+            currency=currency,
+            estimated_market_value=estimated_market_value,
+            expected_resale_value=expected_resale_value,
+            asking_price=asking_price,
+            ideal_buy_price=ideal_buy_price,
+            estimated_gross_profit=estimated_gross_profit,
+            estimated_roi=estimated_roi,
+            deal_score=deal_score,
+            pricing_method=pricing_method,
+        )
         self.initialize()
         connection = self._connect()
         try:
@@ -1365,28 +1504,12 @@ class InventoryStore:
                 "SELECT 1 FROM valuation_snapshots WHERE inventory_internal_id = ? LIMIT 1",
                 (item["internal_id"],),
             ).fetchone()
-            cursor = connection.execute(
-                """INSERT INTO valuation_snapshots (
-                    inventory_internal_id, analyzed_at, currency,
-                    estimated_market_value_minor, estimated_market_value_scale,
-                    expected_resale_value_minor, expected_resale_value_scale,
-                    asking_price_minor, asking_price_scale,
-                    ideal_buy_price_minor, ideal_buy_price_scale,
-                    estimated_gross_profit_minor, estimated_gross_profit_scale,
-                    estimated_roi, deal_score, pricing_method, is_baseline
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    item["internal_id"],
-                    timestamp,
-                    currency,
-                    *values,
-                    str(estimated_roi) if estimated_roi is not None else None,
-                    deal_score,
-                    method,
-                    int(has_snapshot is None),
-                ),
+            snapshot_id = self._insert_valuation_snapshot(
+                connection,
+                item["internal_id"],
+                values,
+                is_baseline=has_snapshot is None,
             )
-            snapshot_id = cursor.lastrowid
             connection.commit()
         except Exception:
             connection.rollback()

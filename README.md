@@ -52,7 +52,7 @@ SQLite or duplicating accounting formulas. Pages include:
   provenance, and reversal relationships.
 - **Analytics:** currency-separated sales and profit over time, inventory/reconciliation
   distributions, and defensible holding-period summaries.
-- **Analyze:** a lightweight entry point documenting the supported existing local analyzer.
+- **Analyze:** guidance for the supported local analysis and explicit acquisition workflow.
 - **Integrations / Settings:** safe eBay environment, configuration, and connection status plus
   secure CLI connection actions.
 
@@ -70,7 +70,7 @@ payloads, OAuth tokens, secrets, or credential-store values. The existing eBay d
 remains available at `/api/ebay/account-deletion` on `web.app:app`, while the production-compatible
 `ebay.compliance:app` entry point remains unchanged.
 
-Web editing, browser-based OAuth, full analyzer forms, historical sell-through, currency
+Browser mutations, browser-based OAuth, full analyzer forms, historical sell-through, currency
 conversion, payout reconciliation, and background marketplace sync are intentionally deferred.
 
 ## Pricing
@@ -259,6 +259,25 @@ python main.py inventory list
 python main.py inventory show Q0001
 ```
 
+To analyze one listing from a supported exported JSON feed and explicitly record a completed
+acquisition with its baseline valuation, use the dedicated command. Analysis by itself remains
+read-only with respect to inventory; the asking price and other estimates are never substituted for
+the actual acquisition facts:
+
+```bash
+python main.py acquire --feed data/listings.json --listing-id fb_123 \
+  --cost 241.37 --acquired-at 2026-09-16
+python main.py inventory show Q0001
+python main.py inventory valuation Q0001
+```
+
+`--cost` is the actual USD amount paid and `--acquired-at` is the actual acquisition date. The
+listing source is used as the acquisition source unless `--source` is supplied. Successful
+acquisition creates exactly one normal Q-number and its immutable baseline snapshot in one database
+transaction. Cancellation means not invoking the explicit command and creates nothing. Exported
+listing IDs are not treated as globally durable purchase identities, so retrying a successful
+command creates another Q-number; check the command result before retrying.
+
 Existing records can be corrected or enriched with partial updates. Unspecified fields remain
 unchanged; pass an empty string to clear an optional marketplace field or notes.
 
@@ -429,10 +448,16 @@ python main.py reports valuation
 ```
 
 The durable fields mirror existing analyzer output: estimated market value, conservative expected
-resale, asking price, ideal buy price, estimated gross profit, ROI, deal score, analysis timestamp,
+resale, asking price, ideal buy price, estimated gross profit (expected resale minus asking price),
+ROI, deal score, analysis timestamp,
 currency, and a safe pricing-method label. Confidence and fee estimates are not stored because the
 current analyzer does not produce them. Currency amounts use exact scaled integers; no CLI text,
 raw API response, credential, buyer detail, or address is retained.
+
+Actual acquisition cost is a separate user-supplied transaction fact. Eventual realized profit is
+based on sale proceeds, acquisition cost, and recorded cost components; it is not the analyzer's
+estimated gross profit, and it remains incomplete until the applicable reconciliation categories
+are confirmed.
 
 For compatible currencies, resale error is actual gross minus estimated resale; absolute error is
 its magnitude; percentage error is resale error divided by estimated resale and is unavailable for
