@@ -139,9 +139,9 @@ python -m pricing.market_updater
 
 Seller OAuth is separate from the application token used by the Browse price updater and the
 application token used to verify deletion notifications. It authorizes Flipper to read orders and
-financial transactions belonging to one consenting seller. Flipper requests only the
-`sell.fulfillment.readonly` and `sell.finances` scopes; it does not implement any eBay write
-operation.
+financial transactions and active listings belonging to one consenting seller. Flipper requests
+`sell.fulfillment.readonly`, `sell.finances`, and the base Trading API scope; it does not implement
+any eBay write operation.
 
 Configure these values in your uncommitted `.env` using credentials from one environment only:
 
@@ -183,6 +183,35 @@ two years. Output excludes buyer names, addresses, email addresses, phone number
 responses. Remove the locally stored refresh token with `python main.py ebay disconnect`. This does
 not revoke consent at eBay; use your eBay account's third-party authorization settings when remote
 revocation is also desired.
+
+### Active listing reconciliation
+
+```bash
+python main.py ebay listings
+python main.py ebay sync-listings
+python main.py ebay import-listing Q0007 --source "Family hand-me-down" --acquired-at 2026-03-01 --cost 0.00
+```
+
+Discovery uses the official Trading API `GetMyeBaySelling` ActiveList read operation because eBay's
+REST Inventory API excludes listings created in Seller Hub or through the Trading API. Existing
+refresh tokens must be reauthorized with `python main.py ebay connect` for the newly requested base
+Trading API scope. Flipper requests no listing-write scope and never writes to eBay.
+
+An exact uppercase Q-number Custom Label/SKU maps only to that same local Q-number. Results are
+`MATCHED`, `MISSING_LOCAL`, `MISSING_SKU`, `INVALID_SKU`, or `CONFLICT`; titles, prices, images, and
+approximate strings are never matching keys. Discovery does not persist raw responses or listing
+snapshots.
+
+`sync-listings` changes local state only. It fills absent compatible eBay item ID/SKU linkage and
+may transition an `acquired` item to `listed`; an identical `listed` record is a no-op. Identifier
+disagreement and active listings linked to locally `sold` or `archived` items are conflicts. A
+listing disappearing from the active feed never implies sold or archived.
+
+Missing-local listings require `import-listing` plus the actual acquisition source, date, and USD
+cost. The live asking price and listing date are never substituted for those facts and create no
+valuation history. External Q-number adoption advances the allocator so later generated Q-numbers
+cannot collide. Identical imports are no-ops and conflicting reimports fail. `/ebay/listings`
+provides the same live read-only view without coupling eBay availability to other dashboard pages.
 
 ### Read-only eBay Finances
 

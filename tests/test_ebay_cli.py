@@ -5,6 +5,7 @@ import sqlite3
 import main
 import pytest
 from ebay.finance_transactions import normalize_transaction
+from ebay.listings import EbayActiveListing
 from ebay.orders import EbayOrder, EbayOrderLineItem, Money, OrderPricingSummary
 from ebay.seller_oauth import SellerNotConnectedError
 
@@ -28,6 +29,44 @@ def order():
         line_items=(EbayOrderLineItem("1", "2", "Sony Camera", None, 1, None),),
         pricing=OrderPricingSummary(total=Money(Decimal("42.99"), "USD")),
     )
+
+
+def active_listing(sku="Q0001", item_id="137744631273"):
+    return EbayActiveListing(item_id, sku, "Recorder", "Active", Money(Decimal("75.00"), "USD"), 1)
+
+
+def test_listing_summary_and_explicit_import(monkeypatch, capsys, tmp_path):
+    database = tmp_path / "inventory.db"
+    monkeypatch.setattr(main, "_seller_oauth", lambda: OAuth())
+    monkeypatch.setattr(
+        main.ActiveListingsClient,
+        "get_active_listings",
+        lambda self: [active_listing(), active_listing(None, "2")],
+    )
+    args = ["ebay", "listings", "--database", str(database)]
+    assert main.main(args) == 0
+    output = capsys.readouterr().out
+    assert "$75.00" in output
+    assert "total=2" in output and "missing_local=1" in output and "missing_sku=1" in output
+
+    args = [
+        "ebay",
+        "import-listing",
+        "Q0001",
+        "--source",
+        "gift",
+        "--acquired-at",
+        "2026-03-01",
+        "--cost",
+        "0.00",
+        "--database",
+        str(database),
+    ]
+    assert main.main(args) == 0
+    record = main.InventoryStore(database).get("Q0001")
+    assert record.acquisition_cost == Decimal("0") and record.status == "listed"
+    assert main.main(args) == 0
+    assert len(main.InventoryStore(database).list()) == 1
 
 
 def test_orders_output(monkeypatch, capsys):

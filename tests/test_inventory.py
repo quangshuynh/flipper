@@ -290,6 +290,7 @@ def test_v1_database_migrates_without_changing_existing_record(tmp_path):
             (7,),
             (8,),
             (9,),
+            (10,),
         ]
 
 
@@ -357,7 +358,35 @@ def test_v2_migration_rejects_duplicates_without_modifying_data(tmp_path):
         assert connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone() == (2,)
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,)]
+        ).fetchall() == [(1,), (2,), (10,)]
+
+
+def test_v10_migration_rejects_duplicate_ebay_item_ids(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    store.initialize()
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP INDEX inventory_ebay_item_id")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 10")
+        connection.execute(
+            """INSERT INTO inventory_items (
+                inventory_id, title, source, acquired_at, acquisition_cost_cents,
+                quantity, notes, status, marketplace, marketplace_item_id
+            ) VALUES ('Q0001', 'One', 'gift', '2026-01-01', 0, 1, '', 'acquired',
+                      'eBay', 'same'),
+                     ('Q0002', 'Two', 'gift', '2026-01-01', 0, 1, '', 'acquired',
+                      'EBAY', 'same')"""
+        )
+
+    with pytest.raises(RuntimeError, match="unique marketplace item IDs"):
+        store.initialize()
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone() == (2,)
+        assert (
+            connection.execute(
+                "SELECT version FROM schema_migrations WHERE version = 10"
+            ).fetchone()
+            is None
+        )
 
 
 def test_lifecycle_transitions_set_utc_timestamps_and_preserve_identity(tmp_path):

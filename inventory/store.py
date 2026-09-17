@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
@@ -22,6 +22,16 @@ STATUS_TRANSITIONS = {
     "archived": frozenset({"acquired"}),
 }
 _UNSET = object()
+
+
+def q_number_value(value: str) -> int | None:
+    """Return the positive canonical Q-number value, otherwise None."""
+    if not isinstance(value, str) or not value.startswith("Q") or not value[1:].isdigit():
+        return None
+    number = int(value[1:])
+    if number < 1 or value != f"Q{number:04d}":
+        return None
+    return number
 
 
 class InventoryValidationError(ValueError):
@@ -587,6 +597,24 @@ class InventoryStore:
                     "ON inventory_attachments (inventory_internal_id, created_at, attachment_id)"
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (9)")
+            if 10 not in versions:
+                duplicate = connection.execute(
+                    """SELECT marketplace, marketplace_item_id FROM inventory_items
+                    WHERE marketplace = 'ebay' COLLATE NOCASE AND marketplace_item_id IS NOT NULL
+                    GROUP BY marketplace_item_id HAVING COUNT(*) > 1
+                    LIMIT 1"""
+                ).fetchone()
+                if duplicate is not None:
+                    raise RuntimeError(
+                        "inventory migration cannot enforce unique marketplace item IDs; "
+                        "resolve duplicate marketplace + item ID records first"
+                    )
+                connection.execute(
+                    """CREATE UNIQUE INDEX inventory_ebay_item_id
+                    ON inventory_items (marketplace_item_id)
+                    WHERE marketplace = 'ebay' COLLATE NOCASE AND marketplace_item_id IS NOT NULL"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (10)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -690,6 +718,124 @@ class InventoryStore:
             raise
         finally:
             connection.close()
+
+    def adopt_ebay_listing(
+        self,
+        inventory_id: str,
+        *,
+        title: str,
+        source: str,
+        acquired_at: str,
+        acquisition_cost: str | Decimal,
+        marketplace_item_id: str,
+        marketplace_sku: str,
+        quantity: int = 1,
+    ) -> tuple[InventoryRecord, bool]:
+        """Atomically adopt an externally assigned Q-number and advance the allocator."""
+        number = q_number_value(inventory_id)
+        if number is None:
+            raise InventoryValidationError("inventory ID must be a valid Q-number")
+        if inventory_id != marketplace_sku:
+            raise InventoryValidationError("inventory ID and marketplace SKU must match exactly")
+        values = self._validate_values(
+            title=title,
+            source=source,
+            acquired_at=acquired_at,
+            acquisition_cost=acquisition_cost,
+            quantity=quantity,
+            notes="",
+            status="listed",
+            marketplace="ebay",
+            marketplace_item_id=marketplace_item_id,
+            marketplace_sku=marketplace_sku,
+        )
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM inventory_items WHERE inventory_id = ?", (inventory_id,)
+            ).fetchone()
+            if existing is not None:
+                same = (
+                    existing["marketplace"]
+                    and existing["marketplace"].casefold() == "ebay"
+                    and existing["marketplace_item_id"] == marketplace_item_id
+                    and existing["marketplace_sku"] == marketplace_sku
+                    and existing["source"] == values["source"]
+                    and existing["acquired_at"] == values["acquired_at"]
+                    and existing["acquisition_cost_cents"] == values["acquisition_cost_cents"]
+                )
+                if not same:
+                    raise InventoryValidationError(
+                        "listing import conflicts with existing inventory"
+                    )
+                connection.rollback()
+                return self.get(inventory_id), False
+            connection.execute(
+                """INSERT INTO inventory_items (
+                    inventory_id, title, source, acquired_at, acquisition_cost_cents,
+                    quantity, notes, status, marketplace, marketplace_item_id, marketplace_sku,
+                    listed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (inventory_id, *values.values(), self._utc_now()),
+            )
+            connection.execute(
+                "UPDATE inventory_id_sequence SET last_value = MAX(last_value, ?) "
+                "WHERE singleton = 1",
+                (number,),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get(inventory_id), True
+
+    def sync_ebay_listing(
+        self, inventory_id: str, *, marketplace_item_id: str, marketplace_sku: str
+    ) -> tuple[InventoryRecord, bool]:
+        """Atomically fill identical-safe linkage and acquire-to-listed transition."""
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM inventory_items WHERE inventory_id = ?", (inventory_id.upper(),)
+            ).fetchone()
+            if row is None:
+                raise InventoryNotFoundError(f"inventory item {inventory_id} was not found")
+            if row["status"] in {"sold", "archived"}:
+                raise InventoryValidationError("active eBay listing conflicts with local lifecycle")
+            if (
+                (row["marketplace"] and row["marketplace"].casefold() != "ebay")
+                or (
+                    row["marketplace_item_id"] and row["marketplace_item_id"] != marketplace_item_id
+                )
+                or (row["marketplace_sku"] and row["marketplace_sku"] != marketplace_sku)
+            ):
+                raise InventoryValidationError("active eBay listing conflicts with durable linkage")
+            changed = not (
+                row["marketplace"] == "ebay"
+                and row["marketplace_item_id"] == marketplace_item_id
+                and row["marketplace_sku"] == marketplace_sku
+                and row["status"] == "listed"
+            )
+            connection.execute(
+                "UPDATE inventory_items SET marketplace = 'ebay', "
+                "marketplace_item_id = ?, marketplace_sku = ? WHERE internal_id = ?",
+                (marketplace_item_id, marketplace_sku, row["internal_id"]),
+            )
+            if row["status"] == "acquired":
+                self._transition_row(connection, row, "listed")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get(inventory_id), changed
 
     @staticmethod
     def _insert_inventory(

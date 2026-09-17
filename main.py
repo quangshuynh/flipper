@@ -21,6 +21,12 @@ from ebay.finance_reconciliation import (
 )
 from ebay.finance_import import FinanceImportStatus, import_finance_transactions
 from ebay.finance_transactions import FinanceTransaction
+from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
+from ebay.listing_reconciliation import (
+    ListingReconciliationState,
+    reconcile_active_listings,
+    summarize as summarize_listings,
+)
 from ebay.finances import FinancesApiError, FinancesClient
 from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
 from ebay.orders import EbayOrder, Money
@@ -405,6 +411,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     import_finances.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
     import_finances.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    listings = ebay_commands.add_parser(
+        "listings", help="show active seller listings and local reconciliation"
+    )
+    listings.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    sync_listings = ebay_commands.add_parser(
+        "sync-listings", help="explicitly sync safe matched listings to local inventory"
+    )
+    sync_listings.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    import_listing = ebay_commands.add_parser(
+        "import-listing", help="adopt one missing-local listing with actual acquisition facts"
+    )
+    import_listing.add_argument("sku")
+    import_listing.add_argument("--source", required=True, help="actual acquisition source")
+    import_listing.add_argument(
+        "--acquired-at", required=True, help="actual acquisition date (YYYY-MM-DD)"
+    )
+    import_listing.add_argument("--cost", required=True, help="actual acquisition cost in USD")
+    import_listing.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory = commands.add_parser("inventory", help="manage local inventory")
     inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory.add_argument("--attachment-root", help=argparse.SUPPRESS)
@@ -731,6 +755,77 @@ def run_ebay_command(args: argparse.Namespace) -> int:
                 print("No local eBay seller authorization was stored.")
             return 0
 
+        if args.ebay_command in {"listings", "sync-listings", "import-listing"}:
+            listings = ActiveListingsClient(oauth).get_active_listings()
+            store = InventoryStore(args.database)
+            results = reconcile_active_listings(listings, store.list())
+            if args.ebay_command == "listings":
+                print("SKU | Item ID | Price | Qty | State | Title")
+                for result in results:
+                    listing = result.listing
+                    price = _format_money(listing.asking_price)
+                    quantity = (
+                        listing.quantity_available
+                        if listing.quantity_available is not None
+                        else "-"
+                    )
+                    print(
+                        f"{listing.sku or '-'} | {listing.item_id} | {price} | "
+                        f"{quantity} | {result.state.value} | {listing.title}"
+                    )
+                counts = summarize_listings(results)
+                print(
+                    f"Summary: total={len(results)} "
+                    f"matched={counts[ListingReconciliationState.MATCHED]} "
+                    f"missing_local={counts[ListingReconciliationState.MISSING_LOCAL]} "
+                    f"missing_sku={counts[ListingReconciliationState.MISSING_SKU]} "
+                    f"invalid_sku={counts[ListingReconciliationState.INVALID_SKU]} "
+                    f"conflicts={counts[ListingReconciliationState.CONFLICT]}"
+                )
+                return 0
+            if args.ebay_command == "sync-listings":
+                changed = 0
+                for result in results:
+                    if result.state is ListingReconciliationState.MATCHED and result.inventory:
+                        _, did_change = store.sync_ebay_listing(
+                            result.inventory.inventory_id,
+                            marketplace_item_id=result.listing.item_id,
+                            marketplace_sku=result.listing.sku,
+                        )
+                        changed += int(did_change)
+                conflicts = sum(
+                    result.state is ListingReconciliationState.CONFLICT for result in results
+                )
+                print(
+                    f"Synchronized {changed} local item(s); {conflicts} conflict(s) require "
+                    "review; eBay was not modified."
+                )
+                return 0
+            sku = args.sku.strip()
+            matches = [result for result in results if result.listing.sku == sku]
+            if len(matches) != 1 or matches[0].state not in {
+                ListingReconciliationState.MISSING_LOCAL,
+                ListingReconciliationState.MATCHED,
+            }:
+                raise ValueError("listing cannot be imported safely; inspect 'ebay listings'")
+            result = matches[0]
+            listing = result.listing
+            record, created = store.adopt_ebay_listing(
+                sku,
+                title=listing.title,
+                source=args.source,
+                acquired_at=args.acquired_at,
+                acquisition_cost=args.cost,
+                marketplace_item_id=listing.item_id,
+                marketplace_sku=sku,
+                quantity=1,
+            )
+            print(
+                f"{'Imported' if created else 'Already imported'} {record.inventory_id}; "
+                "eBay was not modified."
+            )
+            return 0
+
         start, end = _order_date_range(args.start, args.end)
         if args.ebay_command in {"finances", "import-finances"}:
             if end - start > timedelta(days=1096):
@@ -757,6 +852,7 @@ def run_ebay_command(args: argparse.Namespace) -> int:
         SellerOAuthError,
         FulfillmentApiError,
         FinancesApiError,
+        ActiveListingsApiError,
         ValueError,
         RuntimeError,
         sqlite3.Error,

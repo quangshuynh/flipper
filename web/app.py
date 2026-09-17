@@ -19,7 +19,9 @@ from starlette.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ebay.compliance import app
-from ebay.seller_oauth import SellerOAuthConfig
+from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
+from ebay.listing_reconciliation import reconcile_active_listings, summarize as summarize_listings
+from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from inventory.attachments import AttachmentService
 from inventory.store import (
     AttachmentNotFoundError,
@@ -328,4 +330,33 @@ def settings_page(request: Request):
         section="settings",
         title="Integrations / Settings",
         ebay=SellerOAuthConfig.connection_status_from_environment(),
+    )
+
+
+@app.get("/ebay/listings", response_class=HTMLResponse)
+def ebay_listings_page(request: Request):
+    """Isolate the optional live eBay call from every other dashboard page."""
+    try:
+        oauth = SellerOAuthClient(SellerOAuthConfig.from_environment())
+        listings = ActiveListingsClient(oauth).get_active_listings()
+        results = reconcile_active_listings(listings, _store().list())
+    except (SellerOAuthError, ActiveListingsApiError) as exc:
+        return _render(
+            request,
+            "ebay_listings.html",
+            section="ebay",
+            title="eBay Listings",
+            results=(),
+            summary=None,
+            error=str(exc),
+            status_code=503,
+        )
+    return _render(
+        request,
+        "ebay_listings.html",
+        section="ebay",
+        title="eBay Listings",
+        results=results,
+        summary=summarize_listings(results),
+        error=None,
     )
