@@ -301,6 +301,39 @@ For practical corrections, `sold → listed` clears `sold_at` but retains `liste
 while clearing both timestamps. A restored item can then be listed again. Generic
 `inventory update` cannot change status.
 
+### Inventory attachments
+
+Each Q-number can own local product photos, receipt images, PDFs, and other supporting documents.
+Attachment metadata is stored in the inventory database; exact imported bytes are copied into the
+Flipper-owned `attachments/` directory beside that database (`data/attachments/` with the default
+configuration). The source file is no longer required after a successful import. Flipper assigns a
+durable UUID and collision-resistant physical filename while retaining the original filename only
+as display metadata.
+
+```bash
+python main.py inventory attach Q0001 ./photo.jpg --category product_photo
+python main.py inventory attach Q0001 ./receipt.pdf --category receipt
+python main.py inventory attachments Q0001
+python main.py inventory remove-attachment Q0001 ATTACHMENT_ID
+```
+
+Categories are `product_photo`, `receipt`, `supporting_document`, and `other`. Supported formats are
+JPEG, PNG, WebP, and PDF, with a 25 MiB limit per file. Flipper checks both the extension and a
+conservative file signature; a browser-supplied media type is never trusted. The inventory detail
+page previews images without altering them and serves every file through a database- and
+Q-number-scoped application route rather than exposing the attachment directory as static files.
+
+Attachments survive archival and sale because they belong to the historical Q-number. Inventory
+item deletion is not an application operation; schema foreign keys restrict deletion while child
+attachment metadata exists. Removing one attachment requires its explicit UUID and removes only
+that metadata/file pair. Import and removal compensate for ordinary filesystem or database
+failures, but SQLite and the filesystem do not provide a single cross-system transaction.
+
+Attachments are local user data, are ignored by git, and are never sent to eBay, AI providers,
+market-data providers, cloud storage, or telemetry. Receipts and screenshots may contain sensitive
+information. Files are not encrypted by Flipper. Backup/restore is not implemented yet; a future
+portable backup must include both the inventory SQLite database and its sibling attachment root.
+
 Lifecycle timestamps use ISO 8601 UTC values ending in `Z`. Databases created with schema v1 are
 migrated automatically; existing records receive null lifecycle timestamps because Flipper does
 not infer historical events.

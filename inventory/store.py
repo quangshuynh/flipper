@@ -8,12 +8,13 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
 SALE_COMPONENT_EFFECTS = ("reduce", "increase")
 RECONCILIATION_CATEGORIES = ("fees", "shipping", "refunds", "adjustments")
+ATTACHMENT_CATEGORIES = ("product_photo", "receipt", "supporting_document", "other")
 STATUS_TRANSITIONS = {
     "acquired": frozenset({"listed", "archived"}),
     "listed": frozenset({"acquired", "sold", "archived"}),
@@ -59,6 +60,14 @@ class ValuationValidationError(ValueError):
     """A valuation snapshot is invalid."""
 
 
+class AttachmentNotFoundError(LookupError):
+    """No attachment has the requested durable identifier."""
+
+
+class AttachmentValidationError(ValueError):
+    """An attachment value is invalid."""
+
+
 @dataclass(frozen=True)
 class InventoryRecord:
     """A local inventory record. Acquisition cost is exact integer USD cents."""
@@ -81,6 +90,21 @@ class InventoryRecord:
     @property
     def acquisition_cost(self) -> Decimal:
         return Decimal(self.acquisition_cost_cents) / 100
+
+
+@dataclass(frozen=True)
+class AttachmentRecord:
+    """Metadata for one Flipper-owned file linked to an inventory item."""
+
+    attachment_id: str
+    inventory_internal_id: int
+    inventory_id: str
+    original_filename: str
+    stored_filename: str
+    media_type: str
+    byte_size: int
+    category: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -535,6 +559,34 @@ class InventoryStore:
                     END"""
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (8)")
+            if 9 not in versions:
+                connection.execute(
+                    """CREATE TABLE inventory_attachments (
+                        attachment_id TEXT PRIMARY KEY,
+                        inventory_internal_id INTEGER NOT NULL,
+                        original_filename TEXT NOT NULL
+                            CHECK (length(original_filename) > 0),
+                        stored_filename TEXT NOT NULL UNIQUE
+                            CHECK (length(stored_filename) > 0
+                                   AND instr(stored_filename, '/') = 0
+                                   AND instr(stored_filename, char(92)) = 0),
+                        media_type TEXT NOT NULL CHECK (length(media_type) > 0),
+                        byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+                        category TEXT NOT NULL CHECK (category IN (
+                            'product_photo', 'receipt', 'supporting_document', 'other'
+                        )),
+                        created_at TEXT NOT NULL
+                            CHECK (length(created_at) = 20 AND substr(created_at, 11, 1) = 'T'
+                                   AND substr(created_at, -1) = 'Z'),
+                        FOREIGN KEY (inventory_internal_id)
+                            REFERENCES inventory_items(internal_id) ON DELETE RESTRICT
+                    )"""
+                )
+                connection.execute(
+                    "CREATE INDEX inventory_attachments_inventory "
+                    "ON inventory_attachments (inventory_internal_id, created_at, attachment_id)"
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (9)")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -1554,6 +1606,131 @@ class InventoryStore:
     def baseline_valuation(self, inventory_id: str) -> ValuationSnapshot | None:
         snapshots = self.list_valuation_snapshots(inventory_id)
         return next((snapshot for snapshot in snapshots if snapshot.is_baseline), None)
+
+    def add_attachment_metadata(
+        self,
+        inventory_id: str,
+        *,
+        attachment_id: str,
+        original_filename: str,
+        stored_filename: str,
+        media_type: str,
+        byte_size: int,
+        category: str,
+    ) -> AttachmentRecord:
+        """Persist attachment metadata after its Flipper-owned file is finalized."""
+        if category not in ATTACHMENT_CATEGORIES:
+            raise AttachmentValidationError(
+                f"category must be one of: {', '.join(ATTACHMENT_CATEGORIES)}"
+            )
+        if not attachment_id or not original_filename or not stored_filename or not media_type:
+            raise AttachmentValidationError("attachment metadata fields must not be empty")
+        if "/" in stored_filename or "\\" in stored_filename:
+            raise AttachmentValidationError("stored filename must be a single safe path component")
+        if isinstance(byte_size, bool) or not isinstance(byte_size, int) or byte_size < 0:
+            raise AttachmentValidationError("attachment byte size must be a nonnegative integer")
+        self.initialize()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            item = connection.execute(
+                "SELECT internal_id FROM inventory_items WHERE inventory_id = ?",
+                (inventory_id.upper(),),
+            ).fetchone()
+            if item is None:
+                raise InventoryNotFoundError(f"inventory item {inventory_id} was not found")
+            connection.execute(
+                """INSERT INTO inventory_attachments (
+                    attachment_id, inventory_internal_id, original_filename, stored_filename,
+                    media_type, byte_size, category, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    attachment_id,
+                    item["internal_id"],
+                    original_filename,
+                    stored_filename,
+                    media_type,
+                    byte_size,
+                    category,
+                    self._utc_now(),
+                ),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_attachment(attachment_id, inventory_id=inventory_id)
+
+    def get_attachment(
+        self, attachment_id: str, *, inventory_id: str | None = None
+    ) -> AttachmentRecord:
+        self.initialize()
+        where = "WHERE inventory_attachments.attachment_id = ?"
+        parameters: tuple[object, ...] = (attachment_id,)
+        if inventory_id is not None:
+            where += " AND inventory_items.inventory_id = ?"
+            parameters += (inventory_id.upper(),)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""SELECT inventory_attachments.*, inventory_items.inventory_id
+                FROM inventory_attachments JOIN inventory_items
+                  ON inventory_items.internal_id = inventory_attachments.inventory_internal_id
+                {where}""",
+                parameters,
+            ).fetchone()
+        if row is None:
+            raise AttachmentNotFoundError("attachment was not found for that inventory item")
+        return self._attachment_record(row)
+
+    def list_attachments(self, inventory_id: str) -> list[AttachmentRecord]:
+        item = self.get(inventory_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT inventory_attachments.*, inventory_items.inventory_id
+                FROM inventory_attachments JOIN inventory_items
+                  ON inventory_items.internal_id = inventory_attachments.inventory_internal_id
+                WHERE inventory_attachments.inventory_internal_id = ?
+                ORDER BY inventory_attachments.created_at, inventory_attachments.attachment_id""",
+                (item.internal_id,),
+            ).fetchall()
+        return [self._attachment_record(row) for row in rows]
+
+    def remove_attachment_metadata(self, inventory_id: str, attachment_id: str) -> AttachmentRecord:
+        """Delete metadata only after the attachment service has secured the file."""
+        record = self.get_attachment(attachment_id, inventory_id=inventory_id)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "DELETE FROM inventory_attachments WHERE attachment_id = ? "
+                "AND inventory_internal_id = ?",
+                (attachment_id, record.inventory_internal_id),
+            )
+            if cursor.rowcount != 1:
+                raise AttachmentNotFoundError("attachment was not found for that inventory item")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return record
+
+    @staticmethod
+    def _attachment_record(row: sqlite3.Row) -> AttachmentRecord:
+        return AttachmentRecord(
+            attachment_id=row["attachment_id"],
+            inventory_internal_id=row["inventory_internal_id"],
+            inventory_id=row["inventory_id"],
+            original_filename=row["original_filename"],
+            stored_filename=row["stored_filename"],
+            media_type=row["media_type"],
+            byte_size=row["byte_size"],
+            category=row["category"],
+            created_at=row["created_at"],
+        )
 
     @staticmethod
     def _sale_cost_record(row: sqlite3.Row) -> SaleCostRecord:

@@ -128,3 +128,36 @@ def test_status_command_applies_lifecycle_and_show_displays_timestamps(tmp_path,
 def test_update_cli_does_not_offer_status_bypass(tmp_path):
     with pytest.raises(SystemExit):
         command(tmp_path / "inventory.db", "update", "Q0001", "--status", "listed")
+
+
+def test_attachment_cli_add_list_and_remove(tmp_path, capsys):
+    database = tmp_path / "inventory.db"
+    photo = tmp_path / "photo.jpg"
+    photo.write_bytes(b"\xff\xd8\xffsynthetic")
+    assert (
+        command(
+            database,
+            "add",
+            "--title",
+            "Recorder",
+            "--source",
+            "sale",
+            "--acquired-at",
+            "2026-09-01",
+            "--cost",
+            "20",
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert command(database, "attach", "Q0001", str(photo), "--category", "product_photo") == 0
+    output = capsys.readouterr().out
+    attachment_id = output.splitlines()[0].split()[1]
+    assert "product_photo | photo.jpg | image/jpeg" in output
+    assert command(database, "attachments", "Q0001") == 0
+    assert attachment_id in capsys.readouterr().out
+    assert command(database, "remove-attachment", "Q0001", attachment_id) == 0
+    assert "Removed attachment" in capsys.readouterr().out
+    assert command(database, "attachments", "Q0001") == 0
+    assert "No attachments found" in capsys.readouterr().out

@@ -27,10 +27,14 @@ from ebay.orders import EbayOrder, Money
 from ebay.reconciliation import ReconciliationStatus, reconcile_ebay_orders, summarize
 from ebay.sale_import import SaleImportStatus, import_ebay_sales
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
+from inventory.attachments import AttachmentService
 from inventory.store import (
-    SALE_COST_TYPES,
+    ATTACHMENT_CATEGORIES,
     RECONCILIATION_CATEGORIES,
+    SALE_COST_TYPES,
     VALID_STATUSES,
+    AttachmentNotFoundError,
+    AttachmentValidationError,
     InventoryNotFoundError,
     InventoryRecord,
     InventoryStore,
@@ -403,6 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
     import_finances.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory = commands.add_parser("inventory", help="manage local inventory")
     inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    inventory.add_argument("--attachment-root", help=argparse.SUPPRESS)
     inventory_commands = inventory.add_subparsers(dest="inventory_command", required=True)
     add = inventory_commands.add_parser("add", help="record an acquired item")
     add.add_argument("--title", required=True)
@@ -431,6 +436,19 @@ def build_parser() -> argparse.ArgumentParser:
     status = inventory_commands.add_parser("status", help="transition inventory lifecycle status")
     status.add_argument("inventory_id")
     status.add_argument("status", choices=VALID_STATUSES)
+    attach = inventory_commands.add_parser("attach", help="import a local attachment")
+    attach.add_argument("inventory_id")
+    attach.add_argument("source")
+    attach.add_argument("--category", choices=ATTACHMENT_CATEGORIES, default="other")
+    attachments = inventory_commands.add_parser(
+        "attachments", help="list attachments for one inventory item"
+    )
+    attachments.add_argument("inventory_id")
+    remove_attachment = inventory_commands.add_parser(
+        "remove-attachment", help="remove one attachment by durable ID"
+    )
+    remove_attachment.add_argument("inventory_id")
+    remove_attachment.add_argument("attachment_id")
     valuation = inventory_commands.add_parser(
         "valuation", help="show immutable valuation snapshots for one inventory item"
     )
@@ -538,6 +556,7 @@ def run_acquisition_command(args: argparse.Namespace) -> int:
 
 def run_inventory_command(args: argparse.Namespace) -> int:
     store = InventoryStore(args.database)
+    attachment_service = AttachmentService(store, args.attachment_root)
     try:
         if args.inventory_command == "add":
             record = store.add(
@@ -596,6 +615,35 @@ def run_inventory_command(args: argparse.Namespace) -> int:
             print(f"Inventory item {record.inventory_id}: {record.status}")
             return 0
 
+        if args.inventory_command == "attach":
+            attachment = attachment_service.add(
+                args.inventory_id, args.source, category=args.category
+            )
+            print(f"Attached {attachment.attachment_id} to {attachment.inventory_id}")
+            print(
+                f"{attachment.category} | {attachment.original_filename} | "
+                f"{attachment.media_type} | {attachment.byte_size} bytes"
+            )
+            return 0
+
+        if args.inventory_command == "attachments":
+            attachments = attachment_service.list(args.inventory_id)
+            if not attachments:
+                print(f"No attachments found for {args.inventory_id.upper()}.")
+                return 0
+            for attachment in attachments:
+                print(
+                    f"{attachment.attachment_id} | {attachment.category} | "
+                    f"{attachment.original_filename} | {attachment.media_type} | "
+                    f"{attachment.byte_size} bytes | {attachment.created_at}"
+                )
+            return 0
+
+        if args.inventory_command == "remove-attachment":
+            attachment = attachment_service.remove(args.inventory_id, args.attachment_id)
+            print(f"Removed attachment {attachment.attachment_id} from {attachment.inventory_id}")
+            return 0
+
         if args.inventory_command == "attach-valuation":
             snapshot = store.add_valuation_snapshot(
                 args.inventory_id,
@@ -650,6 +698,8 @@ def run_inventory_command(args: argparse.Namespace) -> int:
     except (
         InventoryValidationError,
         InventoryNotFoundError,
+        AttachmentValidationError,
+        AttachmentNotFoundError,
         ValuationValidationError,
         RuntimeError,
         sqlite3.Error,
