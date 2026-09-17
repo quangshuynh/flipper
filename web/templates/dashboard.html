@@ -7,6 +7,13 @@
   <article><span>Sales on record</span><strong>{{ sales.rows|length }}</strong><small>{{ sales.reconciliation_counts.get('incomplete', 0) }} incomplete</small></article>
   <article class="metric-offset"><span>Holding period</span><strong>{% if sales.average_days_held is none %}—{% else %}{{ sales.average_days_held|round(1) }}d{% endif %}</strong><small>Average sold inventory</small></article>
 </section>
+<section class="panel"><div class="panel-head"><div><h2>Workflow</h2><p>Move from a saved decision to its authoritative result.</p></div></div>
+<div class="workflow-links" aria-label="Reseller workflow">
+  <a href="/deals"><span>Research</span><strong>Find and evaluate a deal</strong></a>
+  <a href="/deals/history"><span>Saved research</span><strong>{{ snapshot_count }} snapshot{{ '' if snapshot_count == 1 else 's' }}</strong></a>
+  <a href="/inventory"><span>Inventory</span><strong>{{ inv.active_count }} active item{{ '' if inv.active_count == 1 else 's' }}</strong></a>
+  <a href="/insights"><span>Historical insights</span><strong>{{ realized_snapshot_count }} linked realized outcome{{ '' if realized_snapshot_count == 1 else 's' }}</strong></a>
+</div></section>
 <section class="panel"><div class="panel-head"><div><h2>Needs attention</h2><p>Deterministic checks from local durable data only.</p></div></div>
 <div class="attention-grid" aria-label="Items needing attention">
   <a href="/inventory?status=acquired"><strong>{{ attention.acquired|length }}</strong><span>Acquired, not yet listed</span></a>

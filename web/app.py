@@ -470,6 +470,8 @@ async def web_http_error(request: Request, exc: StarletteHTTPException):
 def dashboard(request: Request):
     store = _store()
     report = build_summary_report(store, today=_today())
+    snapshots = store.list_research_snapshots()
+    inventory_by_id = {row.record.inventory_id: row.record for row in report.inventory.rows}
     recent_inventory = tuple(reversed(report.inventory.rows[-5:]))
     recent_sales = tuple(reversed(report.sales.rows[-5:]))
     attachment_counts = store.attachment_counts()
@@ -500,6 +502,14 @@ def dashboard(request: Request):
         recent_inventory=recent_inventory,
         recent_sales=recent_sales,
         attention=attention,
+        snapshot_count=len(snapshots),
+        realized_snapshot_count=sum(
+            1
+            for snapshot in snapshots
+            if snapshot.inventory_id
+            and snapshot.inventory_id in inventory_by_id
+            and inventory_by_id[snapshot.inventory_id].status == "sold"
+        ),
     )
 
 
@@ -690,6 +700,11 @@ def sale_detail(request: Request, sale_id: str):
         row=report.rows[0],
         costs=costs,
         valuation_row=valuation_row,
+        linked_snapshots=[
+            snapshot
+            for snapshot in store.list_research_snapshots()
+            if snapshot.inventory_id == item.inventory_id
+        ],
     )
 
 
@@ -1027,7 +1042,7 @@ def research_history(request: Request):
     return _render(
         request,
         "research_history.html",
-        section="deals",
+        section="research",
         title="Research history",
         snapshots=_store().list_research_snapshots(),
     )
@@ -1042,7 +1057,7 @@ def research_snapshot_detail(request: Request, snapshot_id: str):
         return _render(
             request,
             "error.html",
-            section="deals",
+            section="research",
             title="Research snapshot unavailable",
             message="That saved research snapshot was not found or cannot be safely read.",
             status_code=404,
@@ -1050,7 +1065,7 @@ def research_snapshot_detail(request: Request, snapshot_id: str):
     return _render(
         request,
         "research_snapshot.html",
-        section="deals",
+        section="research",
         title="Saved research snapshot",
         snapshot=snapshot,
         payload=snapshot.payload,

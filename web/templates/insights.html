@@ -21,13 +21,15 @@
   {% else %}<p class="empty">No completed sales in this period.</p>{% endif %}
 </section>
 {%- endmacro %}
-{% block actions %}<a class="button secondary" href="/sales">Review sales</a>{% endblock %}
+{% block actions %}<div class="page-actions"><a class="button secondary" href="/inventory?status=sold">Sold inventory</a><a class="button secondary" href="/deals/history">Research history</a></div>{% endblock %}
 {% block content %}
+<p class="callout"><strong>Historical realized data.</strong> Insights describe completed records; they are not forecasts or purchase recommendations.</p>
 <form class="filters" method="get" action="/insights">
   <label for="range">Completed in<select id="range" name="range"><option value="all"{% if selected_range == 'all' %} selected{% endif %}>All time</option><option value="30"{% if selected_range == '30' %} selected{% endif %}>Last 30 days</option><option value="90"{% if selected_range == '90' %} selected{% endif %}>Last 90 days</option><option value="365"{% if selected_range == '365' %} selected{% endif %}>Last 365 days</option></select></label>
   <button type="submit">Apply</button>
 </form>
 {% set overall = insights.overall %}
+{% if overall.completed_count == 0 %}<section class="panel empty"><h2>No historical outcomes in this period</h2><p>Insights need authoritative completed sales. Change the time range or review inventory and sale accounting.</p><div class="page-actions"><a class="button secondary" href="/insights?range=all">View all time</a><a class="button" href="/inventory">Review inventory</a></div></section>{% endif %}
 <section class="metrics">
   <article class="metric-primary"><span>Completed sales</span><strong>{{ overall.completed_count }}</strong><small>{% if insights.start %}{{ insights.start }} through {{ insights.end }}{% else %}All recorded sale dates{% endif %}</small></article>
   <article><span>Gross revenue</span><strong>{{ revenues(overall.revenue_by_currency) }}</strong><small>Authoritative recorded sales</small></article>

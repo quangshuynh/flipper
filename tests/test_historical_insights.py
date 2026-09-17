@@ -177,6 +177,9 @@ def test_insights_web_empty_partial_complete_and_safe_ranges(monkeypatch, tmp_pa
 
     empty = client.get("/insights")
     assert empty.status_code == 200
+    assert "Historical realized data" in empty.text
+    assert "No historical outcomes in this period" in empty.text
+    assert 'href="/inventory"' in empty.text
     assert "No completed sales in this period" in empty.text
 
     _, complete = _sell(store, 1, sold_at="2026-09-17T00:00:00Z")
