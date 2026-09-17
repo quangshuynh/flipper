@@ -105,11 +105,22 @@ The deterministic score considers price versus value, expected gross profit, ide
 
 Use Python 3.13 or newer.
 
+On Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+```
+
+On macOS or Linux:
+
 ```bash
 python -m venv .venv
-.venv\\Scripts\\activate
-pip install -r requirements-dev.txt
-copy .env.example .env
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+cp .env.example .env
 ```
 
 Set only the environment variables needed for the integrations you use. `.env` is ignored by Git. The sample feed can be analyzed with:
