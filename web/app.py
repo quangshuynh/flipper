@@ -8,10 +8,11 @@ from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fastapi import HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import pass_context
 from dotenv import load_dotenv
@@ -20,13 +21,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ebay.compliance import app
 from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
-from ebay.listing_reconciliation import reconcile_active_listings, summarize as summarize_listings
+from ebay.listing_reconciliation import summarize as summarize_listings
+from ebay.listing_workflow import import_listing, reconcile_listings, sync_listings
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from inventory.attachments import AttachmentService
 from inventory.store import (
     AttachmentNotFoundError,
     AttachmentValidationError,
     InventoryNotFoundError,
+    InventoryValidationError,
     InventoryStore,
     SaleNotFoundError,
 )
@@ -101,6 +104,43 @@ def _load_reports(store: InventoryStore):
     return inventory_view, sales_view
 
 
+def _live_listing_results(store: InventoryStore):
+    oauth = SellerOAuthClient(SellerOAuthConfig.from_environment())
+    listings = ActiveListingsClient(oauth).get_active_listings()
+    return reconcile_listings(store, listings)
+
+
+def _safe_ebay_error(exc: Exception) -> str:
+    if isinstance(exc, SellerOAuthError):
+        return (
+            "eBay authorization is unavailable or no longer has the required scope. "
+            "Reconnect with the supported CLI connection workflow, then try again."
+        )
+    return "eBay listings are temporarily unavailable. No local inventory was changed."
+
+
+async def _post_fields(request: Request) -> dict[str, str]:
+    """Parse small URL-encoded local forms without introducing multipart handling."""
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/x-www-form-urlencoded":
+        raise HTTPException(status_code=415, detail="Unsupported form encoding")
+    origin = request.headers.get("origin")
+    if origin:
+        parsed = urlsplit(origin)
+        if parsed.scheme not in {"http", "https"} or parsed.netloc != request.url.netloc:
+            raise HTTPException(status_code=403, detail="Cross-origin mutation rejected")
+    raw = await request.body()
+    if len(raw) > 16_384:
+        raise HTTPException(status_code=413, detail="Form is too large")
+    values = parse_qs(raw.decode("utf-8", errors="strict"), keep_blank_values=True)
+    return {key: entries[-1].strip() for key, entries in values.items() if entries}
+
+
+def _redirect(path: str, **params: str) -> RedirectResponse:
+    target = f"{path}?{urlencode(params)}" if params else path
+    return RedirectResponse(target, status_code=303)
+
+
 @app.exception_handler(sqlite3.Error)
 @app.exception_handler(RuntimeError)
 async def database_error(request: Request, _exc: sqlite3.Error):
@@ -137,9 +177,29 @@ async def web_http_error(request: Request, exc: StarletteHTTPException):
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    report = build_summary_report(_store(), today=_today())
+    store = _store()
+    report = build_summary_report(store, today=_today())
     recent_inventory = tuple(reversed(report.inventory.rows[-5:]))
     recent_sales = tuple(reversed(report.sales.rows[-5:]))
+    attachment_counts = store.attachment_counts()
+    attention = {
+        "acquired": tuple(row for row in report.inventory.rows if row.record.status == "acquired"),
+        "unlinked": tuple(
+            row
+            for row in report.inventory.rows
+            if row.record.status == "listed"
+            and not (row.record.marketplace_item_id and row.record.marketplace_sku)
+        ),
+        "missing_attachments": tuple(
+            row
+            for row in report.inventory.rows
+            if row.record.status in {"acquired", "listed"}
+            and attachment_counts.get(row.record.internal_id, 0) == 0
+        ),
+        "unreconciled_sales": tuple(
+            row for row in report.sales.rows if row.reconciliation_state != "fully_reconciled"
+        ),
+    }
     return _render(
         request,
         "dashboard.html",
@@ -148,6 +208,7 @@ def dashboard(request: Request):
         report=report,
         recent_inventory=recent_inventory,
         recent_sales=recent_sales,
+        attention=attention,
     )
 
 
@@ -157,8 +218,10 @@ def inventory_page(
     status: str = "",
     search: str = "",
     sort: str = "acquired_desc",
+    linkage: str = "",
 ):
-    report, _ = _load_reports(_store())
+    store = _store()
+    report, _ = _load_reports(store)
     rows = list(report.rows)
     if status:
         rows = [row for row in rows if row.record.status == status]
@@ -171,12 +234,18 @@ def inventory_page(
             or needle in (row.record.marketplace_sku or "").casefold()
             or needle in row.record.title.casefold()
         ]
+    if linkage == "linked":
+        rows = [row for row in rows if row.record.marketplace_item_id]
+    elif linkage == "unlinked":
+        rows = [row for row in rows if not row.record.marketplace_item_id]
     sorters = {
         "acquired_desc": lambda row: (row.record.acquired_at, row.record.internal_id),
         "acquired_asc": lambda row: (row.record.acquired_at, row.record.internal_id),
         "cost_desc": lambda row: (row.record.acquisition_cost_cents, row.record.internal_id),
         "cost_asc": lambda row: (row.record.acquisition_cost_cents, row.record.internal_id),
         "age_desc": lambda row: (row.days_held if row.days_held is not None else -1),
+        "q_asc": lambda row: row.record.internal_id,
+        "q_desc": lambda row: row.record.internal_id,
     }
     selected_sort = sort if sort in sorters else "acquired_desc"
     rows.sort(key=sorters[selected_sort], reverse=selected_sort.endswith("desc"))
@@ -189,6 +258,8 @@ def inventory_page(
         status=status,
         search=search,
         sort=selected_sort,
+        linkage=linkage if linkage in {"linked", "unlinked"} else "",
+        attachment_counts=store.attachment_counts(),
     )
 
 
@@ -334,12 +405,10 @@ def settings_page(request: Request):
 
 
 @app.get("/ebay/listings", response_class=HTMLResponse)
-def ebay_listings_page(request: Request):
+def ebay_listings_page(request: Request, message: str = "", error_message: str = ""):
     """Isolate the optional live eBay call from every other dashboard page."""
     try:
-        oauth = SellerOAuthClient(SellerOAuthConfig.from_environment())
-        listings = ActiveListingsClient(oauth).get_active_listings()
-        results = reconcile_active_listings(listings, _store().list())
+        results = _live_listing_results(_store())
     except (SellerOAuthError, ActiveListingsApiError) as exc:
         return _render(
             request,
@@ -348,7 +417,7 @@ def ebay_listings_page(request: Request):
             title="eBay Listings",
             results=(),
             summary=None,
-            error=str(exc),
+            error=_safe_ebay_error(exc),
             status_code=503,
         )
     return _render(
@@ -359,4 +428,66 @@ def ebay_listings_page(request: Request):
         results=results,
         summary=summarize_listings(results),
         error=None,
+        message=message,
+        error_message=error_message,
+    )
+
+
+@app.post("/ebay/listings/sync")
+async def ebay_listings_sync(request: Request):
+    await _post_fields(request)
+    store = _store()
+    try:
+        summary = sync_listings(store, _live_listing_results(store))
+    except (SellerOAuthError, ActiveListingsApiError) as exc:
+        return _render(
+            request,
+            "ebay_listings.html",
+            section="ebay",
+            title="eBay Listings",
+            results=(),
+            summary=None,
+            error=_safe_ebay_error(exc),
+            status_code=503,
+        )
+    message = (
+        f"{summary.checked} listings checked; {summary.already_synchronized} already "
+        f"synchronized; {summary.updated} local inventory items updated; "
+        f"{summary.conflicts} conflicts. eBay was not modified."
+    )
+    return _redirect("/ebay/listings", message=message)
+
+
+@app.post("/ebay/listings/import")
+async def ebay_listing_import(request: Request):
+    fields = await _post_fields(request)
+    required = {
+        "item_id": "listing identity",
+        "sku": "Q-number",
+        "source": "acquisition source",
+        "acquired_at": "acquisition date",
+        "acquisition_cost": "acquisition cost",
+    }
+    missing = [label for name, label in required.items() if not fields.get(name)]
+    if missing:
+        return _redirect("/ebay/listings", error_message=f"Required: {', '.join(missing)}.")
+    store = _store()
+    try:
+        results = _live_listing_results(store)
+        record, created = import_listing(
+            store,
+            results,
+            item_id=fields["item_id"],
+            sku=fields["sku"],
+            source=fields["source"],
+            acquired_at=fields["acquired_at"],
+            acquisition_cost=fields["acquisition_cost"],
+        )
+    except (SellerOAuthError, ActiveListingsApiError) as exc:
+        return _redirect("/ebay/listings", error_message=_safe_ebay_error(exc))
+    except (InventoryValidationError, ValueError) as exc:
+        return _redirect("/ebay/listings", error_message=str(exc))
+    return _redirect(
+        f"/inventory/{record.inventory_id}",
+        message=("Imported from eBay." if created else "Already imported; no duplicate created."),
     )

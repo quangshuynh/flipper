@@ -296,3 +296,138 @@ def test_inventory_detail_and_controlled_attachment_serving(monkeypatch, tmp_pat
     assert served.headers["x-content-type-options"] == "nosniff"
     assert wrong_owner.status_code == 404
     assert unknown.status_code == 404
+
+
+def _mock_live_listings(monkeypatch, listings):
+    monkeypatch.setattr(web_app.SellerOAuthConfig, "from_environment", lambda: object())
+    monkeypatch.setattr(web_app, "SellerOAuthClient", lambda config: object())
+    monkeypatch.setattr(
+        web_app,
+        "ActiveListingsClient",
+        lambda oauth: type("Client", (), {"get_active_listings": lambda self: listings})(),
+    )
+
+
+def test_listing_get_is_read_only_and_renders_all_attention_states(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    local = store.add(
+        title="Local",
+        source="test",
+        acquired_at="2026-09-01",
+        acquisition_cost="10.00",
+    )
+    conflict = store.add(
+        title="Sold local",
+        source="test",
+        acquired_at="2026-08-01",
+        acquisition_cost="5.00",
+    )
+    store.transition_status(conflict.inventory_id, "listed")
+    store.transition_status(conflict.inventory_id, "sold")
+    listings = [
+        EbayActiveListing("1", local.inventory_id, "Matched", "Active", None, 1),
+        EbayActiveListing("2", "Q0007", "Missing local", "Active", Money(Decimal("75"), "USD"), 1),
+        EbayActiveListing("3", None, "Missing SKU", "Active", None, 1),
+        EbayActiveListing("4", "bad", "Invalid SKU", "Active", None, 1),
+        EbayActiveListing("5", conflict.inventory_id, "Conflict", "Active", None, 1),
+    ]
+    _mock_live_listings(monkeypatch, listings)
+
+    response = client.get("/ebay/listings")
+
+    assert response.status_code == 200
+    assert store.get(local.inventory_id).status == "acquired"
+    assert "Linked to Q0001" in response.text
+    assert "Import into Flipper" in response.text
+    assert "no Flipper Q-number SKU" in response.text
+    assert "not a canonical Flipper Q-number" in response.text
+    assert "Review manually" in response.text
+    assert "eBay asking price: USD 75.00" in response.text
+    assert 'value="75' not in response.text
+
+
+def test_web_sync_updates_local_state_idempotently_and_redirects(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    item = store.add(title="Item", source="test", acquired_at="2026-09-01", acquisition_cost="1")
+    listing = EbayActiveListing("item-1", item.inventory_id, "Item", "Active", None, 1)
+    _mock_live_listings(monkeypatch, [listing])
+
+    first = client.post("/ebay/listings/sync", data={"confirm": "1"}, follow_redirects=False)
+    second = client.post("/ebay/listings/sync", data={"confirm": "1"}, follow_redirects=False)
+
+    assert first.status_code == second.status_code == 303
+    assert store.get(item.inventory_id).status == "listed"
+    assert store.get(item.inventory_id).marketplace_item_id == "item-1"
+    assert "updated" in first.headers["location"]
+    assert "already" in second.headers["location"]
+
+
+def test_web_import_requires_actual_facts_and_is_idempotent(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    listing = EbayActiveListing(
+        "item-7", "Q0007", "Imported", "Active", Money(Decimal("75"), "USD"), 1
+    )
+    _mock_live_listings(monkeypatch, [listing])
+
+    missing = client.post(
+        "/ebay/listings/import",
+        data={
+            "item_id": "item-7",
+            "sku": "Q0007",
+            "source": "",
+            "acquired_at": "",
+            "acquisition_cost": "",
+        },
+        follow_redirects=False,
+    )
+    payload = {
+        "item_id": "item-7",
+        "sku": "Q0007",
+        "source": "estate sale",
+        "acquired_at": "2026-08-02",
+        "acquisition_cost": "12.34",
+    }
+    first = client.post("/ebay/listings/import", data=payload, follow_redirects=False)
+    second = client.post("/ebay/listings/import", data=payload, follow_redirects=False)
+
+    assert missing.status_code == first.status_code == second.status_code == 303
+    assert "Required" in missing.headers["location"]
+    record = store.get("Q0007")
+    assert record.acquisition_cost == Decimal("12.34")
+    assert record.acquired_at == "2026-08-02"
+    assert record.source == "estate sale"
+    assert record.status == "listed"
+    assert len(store.list()) == 1
+    assert (
+        store.add(
+            title="Next", source="test", acquired_at="2026-09-01", acquisition_cost="0"
+        ).inventory_id
+        == "Q0008"
+    )
+
+
+def test_ebay_errors_are_sanitized_and_dashboard_never_fetches(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    calls = 0
+
+    class BrokenClient:
+        def __init__(self, oauth):
+            pass
+
+        def get_active_listings(self):
+            nonlocal calls
+            calls += 1
+            raise web_app.ActiveListingsApiError("raw-token-secret raw XML")
+
+    monkeypatch.setattr(web_app.SellerOAuthConfig, "from_environment", lambda: object())
+    monkeypatch.setattr(web_app, "SellerOAuthClient", lambda config: object())
+    monkeypatch.setattr(web_app, "ActiveListingsClient", BrokenClient)
+
+    dashboard = client.get("/")
+    listings = client.get("/ebay/listings")
+
+    assert dashboard.status_code == 200
+    assert calls == 1
+    assert listings.status_code == 503
+    assert "temporarily unavailable" in listings.text
+    assert "raw-token-secret" not in listings.text
