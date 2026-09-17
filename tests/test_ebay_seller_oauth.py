@@ -156,7 +156,7 @@ def test_connection_status_distinguishes_missing_token_and_configuration(monkeyp
     monkeypatch.setenv("EBAY_SELLER_RUNAME", "runame")
     assert SellerOAuthConfig.connection_status_from_environment(Store()).connected is False
 
-    monkeypatch.delenv("EBAY_SELLER_RUNAME")
+    monkeypatch.delenv("EBAY_SELLER_RUNAME", raising=False)
     status = SellerOAuthConfig.connection_status_from_environment(Store())
     assert status.configured is False
     assert status.connected is False

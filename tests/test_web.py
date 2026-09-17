@@ -169,7 +169,7 @@ def test_settings_handles_incomplete_configuration(monkeypatch, tmp_path):
     monkeypatch.setenv("EBAY_SELLER_ENV", "production")
     monkeypatch.setenv("EBAY_SELLER_CLIENT_ID", "client")
     monkeypatch.setenv("EBAY_SELLER_CLIENT_SECRET", "secret-not-rendered")
-    monkeypatch.delenv("EBAY_SELLER_RUNAME")
+    monkeypatch.delenv("EBAY_SELLER_RUNAME", raising=False)
 
     response = client.get("/settings")
 
