@@ -43,3 +43,5 @@ recommendation.
 Flipper does not scrape marketplaces, mutate eBay, store searches as deal history, convert
 currencies, or claim incomplete economics are final profit. Optional external integrations fail
 independently from deterministic local paths. Browse results are active listings, not sold evidence.
+Comparables are evidence rather than automatic valuations, and historical metrics are descriptive:
+Flipper does not predict future resale performance or provide tax advice.

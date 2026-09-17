@@ -36,6 +36,25 @@ def test_empty_database_initializes_versioned_schema(tmp_path):
         ]
 
 
+def test_current_schema_reopens_without_changing_data_or_migration_metadata(tmp_path):
+    database = tmp_path / "inventory.db"
+    store = InventoryStore(database)
+    original = store.add(**values())
+    with sqlite3.connect(database) as connection:
+        before = connection.execute(
+            "SELECT version, applied_at FROM schema_migrations ORDER BY version"
+        ).fetchall()
+
+    store.initialize()
+
+    assert store.get(original.inventory_id) == original
+    with sqlite3.connect(database) as connection:
+        after = connection.execute(
+            "SELECT version, applied_at FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    assert after == before
+
+
 def test_ids_increment_and_deleted_ids_are_not_reused(tmp_path):
     store = InventoryStore(tmp_path / "inventory.db")
     assert store.add(**values()).inventory_id == "Q0001"

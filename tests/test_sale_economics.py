@@ -62,6 +62,27 @@ def test_domain_calculates_exact_recorded_profit_and_aggregates_components():
     assert economics.recorded_profit == Decimal("34.00")
 
 
+def test_all_authoritative_components_and_actual_travel_are_counted_once():
+    economics = calculate_sale_economics(
+        gross=Decimal("250.00"),
+        acquisition_cost=Decimal("100.00"),
+        sourcing_travel_cost=Decimal("12.50"),
+        currency="USD",
+        acquisition_currency="USD",
+        components=[
+            EconomicComponent("marketplace_fee", Decimal("25.00"), "USD"),
+            EconomicComponent("shipping_cost", Decimal("15.00"), "USD"),
+            EconomicComponent("refund", Decimal("10.00"), "USD"),
+            EconomicComponent("other_adjustment", Decimal("5.00"), "USD"),
+            EconomicComponent("other_adjustment", Decimal("3.00"), "USD", effect="increase"),
+        ],
+    )
+
+    assert economics.acquisition_cost == Decimal("100.00")
+    assert economics.sourcing_travel_cost == Decimal("12.50")
+    assert economics.recorded_profit == Decimal("85.50")
+
+
 def test_domain_rejects_currency_mismatch_and_negative_amount():
     with pytest.raises(ValueError, match="acquisition currency"):
         calculate_sale_economics(
