@@ -1,11 +1,1 @@
-.notice { padding: .8rem 1rem; border: 1px solid #8bc9c1; background: var(--accent-soft); border-radius: 7px; }
-.notice.error { border-color: #d79292; background: #f8dddd; color: var(--danger); }
-.attention-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; }
-.attention-grid a { display: grid; background: var(--surface-2); padding: 1rem; border-radius: 8px; color: var(--text); }
-.attention-grid strong { font-size: 1.5rem; color: var(--accent); }
-.stacked-form { display: grid; gap: .6rem; min-width: 260px; margin-top: .75rem; }
-.stacked-form label { display: grid; gap: .2rem; font-size: .75rem; font-weight: 700; color: var(--muted); }
-.stacked-form input { padding: .5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
-details summary { cursor: pointer; color: var(--accent); font-weight: 700; }
-@media (max-width: 850px) { .attention-grid { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 480px) { .attention-grid { grid-template-columns: 1fr; } }
+.notice{padding:.8rem 1rem;border:1px solid #6eb5a2;border-radius:var(--radius-sm);background:var(--accent-soft);color:var(--accent-dark)}.notice.error{border-color:#d79292;background:var(--danger-soft);color:var(--danger)}.attention-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem}.attention-grid a{display:grid;min-height:112px;padding:1rem;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--raised);color:var(--ink);text-decoration:none}.attention-grid a:nth-child(1){border-top:4px solid var(--brand)}.attention-grid a:nth-child(2){border-top:4px solid var(--warning)}.attention-grid a:nth-child(3){border-top:4px solid var(--info)}.attention-grid a:nth-child(4){border-top:4px solid var(--danger)}.attention-grid a:hover{border-color:var(--brand);box-shadow:var(--shadow-lift)}.attention-grid strong{color:var(--accent-dark);font-size:1.7rem}.stacked-form{display:grid;gap:.6rem;min-width:260px;margin-top:.75rem}details summary{color:var(--accent-dark);font-weight:750;cursor:pointer}@media(max-width:900px){.attention-grid{grid-template-columns:1fr 1fr}}@media(max-width:520px){.attention-grid{grid-template-columns:1fr}}

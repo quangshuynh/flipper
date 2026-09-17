@@ -91,6 +91,62 @@ def test_web_application_starts_and_empty_states(monkeypatch, tmp_path):
     assert "No sales data available" in analytics.text
 
 
+def test_shared_shell_brand_favicon_navigation_and_active_state(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+
+    response = client.get("/inventory")
+    favicon = client.get("/static/flipper-logo2.png")
+
+    assert response.status_code == 200
+    assert favicon.status_code == 200
+    assert favicon.headers["content-type"] == "image/png"
+    assert (
+        'rel="icon" type="image/png" href="http://testserver/static/flipper-logo2.png"'
+        in response.text
+    )
+    assert '<img src="http://testserver/static/flipper-logo2.png"' in response.text
+    assert 'aria-label="Primary"' in response.text
+    assert 'class="active" href="/inventory"' in response.text
+    for path in (
+        "/",
+        "/inventory",
+        "/ebay/listings",
+        "/sales",
+        "/analytics",
+        "/analyze",
+        "/settings",
+    ):
+        assert f'href="{path}"' in response.text
+    assert 'href="/deals"' not in response.text
+    assert "Deals" in response.text
+
+
+def test_all_local_primary_pages_render_shared_shell(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+
+    for path in ("/", "/inventory", "/sales", "/analytics", "/analyze", "/settings"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "Flipper dashboard" in response.text
+        assert "Skip to content" in response.text
+
+
+def test_statuses_have_text_not_color_alone(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    item = store.add(
+        title="Textual state",
+        source="test",
+        acquired_at="2026-09-01",
+        acquisition_cost="10.00",
+    )
+
+    response = client.get("/inventory")
+
+    assert response.status_code == 200
+    assert f'href="/inventory/{item.inventory_id}"' in response.text
+    assert ">acquired</span>" in response.text
+
+
 def test_populated_dashboard_inventory_and_details(monkeypatch, tmp_path):
     client, store = _client(monkeypatch, tmp_path)
     store.add(
