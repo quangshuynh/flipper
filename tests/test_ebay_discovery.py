@@ -4,8 +4,13 @@ import pytest
 import requests
 
 from deals.categories import DealCategory
-from deals.ebay import map_ebay_category, normalize_ebay_item, normalize_search_results
-from deals.models import AmountStatus, SourceIdentity
+from deals.ebay import (
+    map_ebay_category,
+    map_ebay_category_mapping,
+    normalize_ebay_item,
+    normalize_search_results,
+)
+from deals.models import AmountStatus, EvidenceLevel, ProvenanceKind, SourceIdentity
 from ebay.discovery import (
     BROWSE_SCOPE,
     DiscoveryConfig,
@@ -128,6 +133,72 @@ def test_mapping_fallback_safe_urls_and_partial_malformed_results():
     assert opportunity.url is None
     results = normalize_search_results({"itemSummaries": [valid, {}, "bad"]})
     assert len(results) == 1
+
+
+def test_taxonomy_ancestry_maps_leaf_and_preserves_provenance():
+    mapping = map_ebay_category_mapping("31388", ("0", "293"))
+    assert mapping.category is DealCategory.ELECTRONICS
+    assert mapping.confidence is EvidenceLevel.STRONG
+    assert mapping.provenance.kind is ProvenanceKind.SOURCE_API
+    opportunity, _ = normalize_ebay_item(
+        _item(categoryId="31388"), category_ancestry={"31388": ("0", "293")}
+    )
+    assert opportunity.category is DealCategory.ELECTRONICS
+    assert opportunity.category_provenance.label == "eBay Taxonomy ancestry"
+
+
+def test_marketplace_specific_and_unknown_mapping_fall_back_without_false_confidence():
+    mapping = map_ebay_category_mapping("293", marketplace_id="EBAY_GB")
+    assert mapping.category is DealCategory.EVERYTHING_ELSE
+    assert mapping.confidence is None
+    assert mapping.provenance.kind is ProvenanceKind.UNKNOWN
+
+
+def test_taxonomy_tree_is_normalized_once_and_cached_without_n_plus_one():
+    EbayDiscoveryClient.clear_taxonomy_cache()
+    tree_info = Response(body={"categoryTreeId": "0", "categoryTreeVersion": "123"})
+    tree = Response(
+        body={
+            "categoryTreeVersion": "123",
+            "rootCategoryNode": {
+                "category": {"categoryId": "0", "categoryName": "Root"},
+                "childCategoryTreeNodes": [
+                    {
+                        "category": {"categoryId": "293", "categoryName": "Electronics"},
+                        "childCategoryTreeNodes": [
+                            {
+                                "category": {"categoryId": "31388", "categoryName": "Cameras"},
+                                "leafCategoryTreeNode": True,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+    client, session = _client(tree_info, tree)
+    first = client.category_ancestry()
+    second = client.category_ancestry()
+    assert first["31388"] == ("0", "293")
+    assert second is first
+    assert len(session.get_calls) == 2
+
+
+@pytest.mark.parametrize(
+    "responses",
+    [
+        (Response(body={"unexpected": "shape"}),),
+        (
+            Response(body={"categoryTreeId": "0", "categoryTreeVersion": "1"}),
+            Response(body={"categoryTreeVersion": "1", "rootCategoryNode": []}),
+        ),
+    ],
+)
+def test_taxonomy_malformed_responses_are_sanitized(responses):
+    EbayDiscoveryClient.clear_taxonomy_cache()
+    client, _ = _client(*responses)
+    with pytest.raises(EbayDiscoveryError, match="taxonomy returned malformed"):
+        client.category_ancestry()
 
 
 def test_failures_are_sanitized_and_tokens_never_leak():

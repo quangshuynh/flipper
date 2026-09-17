@@ -8,6 +8,8 @@ from deals.models import (
     CostComponent,
     DealEconomics,
     Money,
+    EvidenceProvenance,
+    ProvenanceKind,
     ProfitVelocity,
     RoiState,
     TimeToSale,
@@ -134,4 +136,31 @@ def calculate_economics(
         roi_state=roi_state,
         profit_velocity=velocity,
         unavailable_reasons=tuple(reasons),
+        provenance={
+            "landed_cost": EvidenceProvenance(
+                ProvenanceKind.FLIPPER_CALCULATION,
+                "Flipper calculation",
+                ("asking price", "tax", "inbound shipping", "travel", "other acquisition cost"),
+            ),
+            "expected_net_proceeds": EvidenceProvenance(
+                ProvenanceKind.FLIPPER_CALCULATION,
+                "Flipper calculation",
+                ("expected resale", "selling fees", "outbound shipping", "other selling costs"),
+            ),
+            "expected_net_profit": EvidenceProvenance(
+                ProvenanceKind.FLIPPER_CALCULATION,
+                "Flipper calculation",
+                ("landed cost", "expected net proceeds"),
+            ),
+            "roi": EvidenceProvenance(
+                ProvenanceKind.FLIPPER_CALCULATION,
+                "Flipper calculation",
+                ("expected net profit", "landed cost"),
+            ),
+            "profit_velocity": EvidenceProvenance(
+                ProvenanceKind.FLIPPER_CALCULATION,
+                "Flipper calculation",
+                ("expected net profit", "time-to-sale range"),
+            ),
+        },
     )

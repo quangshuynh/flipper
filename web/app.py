@@ -23,8 +23,16 @@ from acquisition import acquire_opportunity
 from deals.categories import DealCategory, normalize_category
 from deals.ebay import EBAY_CATEGORY_MAP, normalize_ebay_item, normalize_search_results
 from deals.economics import calculate_economics
-from deals.evaluation import DealEvaluation
-from deals.models import ConfidenceEvidence, CostComponent, EvidenceLevel, RiskFactor, TimeToSale
+from deals.evaluation import ComparisonResult, DealEvaluation, compare
+from deals.models import (
+    ConfidenceEvidence,
+    CostComponent,
+    EvidenceLevel,
+    EvidenceProvenance,
+    ProvenanceKind,
+    RiskFactor,
+    TimeToSale,
+)
 from ebay.compliance import app
 from ebay.discovery import DiscoveryConfig, EbayDiscoveryClient, EbayDiscoveryError
 from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
@@ -129,18 +137,34 @@ def _discovery() -> EbayDiscoveryClient:
     return EbayDiscoveryClient(DiscoveryConfig.from_environment())
 
 
+USER_ASSUMPTION = EvidenceProvenance(ProvenanceKind.USER_ASSUMPTION, "User assumption")
+
+
 def _estimated(value: str, currency: str) -> CostComponent:
-    return CostComponent.estimated(value, currency) if value else CostComponent.unknown()
+    return (
+        CostComponent.estimated(value, currency, provenance=USER_ASSUMPTION)
+        if value
+        else CostComponent.unknown()
+    )
+
+
+def _taxonomy(client) -> tuple[dict[str, tuple[str, ...]], str]:
+    try:
+        return client.category_ancestry(), client.config.marketplace_id
+    except (AttributeError, EbayDiscoveryError):
+        return {}, getattr(getattr(client, "config", None), "marketplace_id", "EBAY_US")
 
 
 def _deal_analysis(opportunity, shipping, values: dict[str, str]) -> DealEvaluation:
+    if any(len(value) > 64 for value in values.values()):
+        raise ValueError("assumption value is too long")
     minimum = values.get("minimum_sale_days", "")
     maximum = values.get("maximum_sale_days", "")
     time_to_sale = None
     if minimum or maximum:
         if not minimum or not maximum:
             raise ValueError("both minimum and maximum sale days are required")
-        time_to_sale = TimeToSale(int(minimum), int(maximum), "user estimate")
+        time_to_sale = TimeToSale(int(minimum), int(maximum), "user estimate", USER_ASSUMPTION)
     currency = opportunity.base_price.currency
     economics = calculate_economics(
         base_price=opportunity.base_price,
@@ -164,7 +188,15 @@ def _deal_analysis(opportunity, shipping, values: dict[str, str]) -> DealEvaluat
     return DealEvaluation(
         economics=economics,
         time_to_sale=time_to_sale,
-        confidence=ConfidenceEvidence(category_match=EvidenceLevel.WEAK),
+        confidence=ConfidenceEvidence(
+            category_match=(
+                EvidenceLevel.STRONG
+                if opportunity.category_provenance.label == "eBay Taxonomy ancestry"
+                else EvidenceLevel.WEAK
+                if opportunity.category_provenance.kind is not ProvenanceKind.UNKNOWN
+                else None
+            )
+        ),
         risks=tuple(risks),
     )
 
@@ -474,7 +506,8 @@ def deals_page(
             error = "Choose a recognized Flipper category."
     if q and error is None:
         try:
-            body = _discovery().search(
+            client = _discovery()
+            body = client.search(
                 q,
                 category_id=next(
                     (key for key, value in EBAY_CATEGORY_MAP.items() if value == selected_category),
@@ -486,7 +519,12 @@ def deals_page(
                 limit=24,
                 offset=(page - 1) * 24,
             )
-            results.extend(normalize_search_results(body))
+            ancestry, marketplace = _taxonomy(client)
+            results.extend(
+                normalize_search_results(
+                    body, category_ancestry=ancestry, marketplace_id=marketplace
+                )
+            )
         except (EbayDiscoveryError, ValueError):
             error = (
                 "eBay discovery is unavailable or the search is invalid. "
@@ -519,7 +557,13 @@ def deals_page(
 def deal_detail(request: Request, item_id: str):
     values = dict(request.query_params)
     try:
-        opportunity, shipping = normalize_ebay_item(_discovery().get_item(item_id))
+        client = _discovery()
+        ancestry, marketplace = _taxonomy(client)
+        opportunity, shipping = normalize_ebay_item(
+            client.get_item(item_id),
+            category_ancestry=ancestry,
+            marketplace_id=marketplace,
+        )
         evaluation = _deal_analysis(opportunity, shipping, values)
     except (EbayDiscoveryError, ValueError):
         return _render(
@@ -542,6 +586,102 @@ def deal_detail(request: Request, item_id: str):
     )
 
 
+@app.get("/deals/compare", response_class=HTMLResponse)
+def deal_compare(request: Request):
+    if len(request.url.query) > 5_000:
+        return _render(
+            request,
+            "deal_compare.html",
+            section="deals",
+            title="Compare deals",
+            entries=(),
+            comparisons=(),
+            pareto=(),
+            error="Comparison state is too large.",
+            status_code=400,
+        )
+    item_ids = request.query_params.getlist("item_id")
+    unique_ids = list(dict.fromkeys(item_ids))
+    error = None
+    if len(unique_ids) != len(item_ids):
+        error = "Choose each opportunity only once."
+    elif not 2 <= len(unique_ids) <= 4:
+        error = "Choose between 2 and 4 opportunities to compare."
+    if error:
+        return _render(
+            request,
+            "deal_compare.html",
+            section="deals",
+            title="Compare deals",
+            entries=(),
+            comparisons=(),
+            pareto=(),
+            error=error,
+            status_code=400,
+        )
+    client = _discovery()
+    ancestry, marketplace = _taxonomy(client)
+    entries = []
+    for index, item_id in enumerate(unique_ids):
+        prefix = f"d{index}_"
+        values = {
+            name: request.query_params.get(prefix + name, "")
+            for name in (
+                "tax",
+                "travel_cost",
+                "other_acquisition_cost",
+                "expected_resale",
+                "selling_fees",
+                "outbound_shipping",
+                "other_selling_cost",
+                "minimum_sale_days",
+                "maximum_sale_days",
+            )
+        }
+        try:
+            opportunity, shipping = normalize_ebay_item(
+                client.get_item(item_id),
+                category_ancestry=ancestry,
+                marketplace_id=marketplace,
+            )
+            evaluation = _deal_analysis(opportunity, shipping, values)
+            entries.append(
+                {
+                    "item_id": item_id,
+                    "opportunity": opportunity,
+                    "shipping": shipping,
+                    "evaluation": evaluation,
+                    "values": values,
+                    "index": index,
+                    "error": None,
+                }
+            )
+        except (EbayDiscoveryError, ValueError):
+            entries.append({"item_id": item_id, "index": index, "error": "Unavailable"})
+    valid = [entry for entry in entries if not entry["error"]]
+    comparisons = []
+    dominated: set[str] = set()
+    for left_index, left in enumerate(valid):
+        for right in valid[left_index + 1 :]:
+            result = compare(left["evaluation"], right["evaluation"])
+            comparisons.append((left, right, result))
+            if result.result is ComparisonResult.LEFT_DOMINATES:
+                dominated.add(right["item_id"])
+            elif result.result is ComparisonResult.RIGHT_DOMINATES:
+                dominated.add(left["item_id"])
+    pareto = tuple(entry["item_id"] for entry in valid if entry["item_id"] not in dominated)
+    return _render(
+        request,
+        "deal_compare.html",
+        section="deals",
+        title="Compare deals",
+        entries=entries,
+        comparisons=comparisons,
+        pareto=pareto,
+        error=None,
+    )
+
+
 @app.post("/deals/ebay/{item_id}/acquire")
 async def deal_acquire(request: Request, item_id: str):
     fields = await _post_fields(request)
@@ -554,7 +694,13 @@ async def deal_acquire(request: Request, item_id: str):
     if missing:
         return _redirect(f"/deals/ebay/{item_id}", error_message=f"Required: {', '.join(missing)}.")
     try:
-        opportunity, _ = normalize_ebay_item(_discovery().get_item(item_id))
+        client = _discovery()
+        ancestry, marketplace = _taxonomy(client)
+        opportunity, _ = normalize_ebay_item(
+            client.get_item(item_id),
+            category_ancestry=ancestry,
+            marketplace_id=marketplace,
+        )
         record = acquire_opportunity(
             _store(),
             opportunity,

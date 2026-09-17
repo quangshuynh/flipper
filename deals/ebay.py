@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import InvalidOperation
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
 from deals.categories import DealCategory
-from deals.models import CostComponent, DealOpportunity, Money, SourceIdentity
+from deals.models import (
+    CostComponent,
+    DealOpportunity,
+    EvidenceLevel,
+    EvidenceProvenance,
+    Money,
+    ProvenanceKind,
+    SourceIdentity,
+)
 
 # US top-level category identifiers. Unknowns deliberately retain the explicit fallback.
 EBAY_CATEGORY_MAP = {
@@ -33,8 +42,46 @@ EBAY_CATEGORY_MAP = {
 }
 
 
-def map_ebay_category(category_id: str | None) -> DealCategory:
-    return EBAY_CATEGORY_MAP.get(str(category_id or ""), DealCategory.EVERYTHING_ELSE)
+@dataclass(frozen=True)
+class EbayCategoryMapping:
+    category: DealCategory
+    provenance: EvidenceProvenance
+    confidence: EvidenceLevel | None
+
+
+def map_ebay_category_mapping(
+    category_id: str | None,
+    ancestry: tuple[str, ...] = (),
+    *,
+    marketplace_id: str = "EBAY_US",
+) -> EbayCategoryMapping:
+    identifiers = tuple(str(value) for value in ancestry) + (str(category_id or ""),)
+    mapped = next(
+        (EBAY_CATEGORY_MAP[value] for value in identifiers if value in EBAY_CATEGORY_MAP), None
+    )
+    if mapped is not None and marketplace_id == "EBAY_US":
+        return EbayCategoryMapping(
+            mapped,
+            EvidenceProvenance(
+                ProvenanceKind.SOURCE_API,
+                "eBay Taxonomy ancestry" if ancestry else "eBay US category fallback",
+            ),
+            EvidenceLevel.STRONG if ancestry else EvidenceLevel.WEAK,
+        )
+    return EbayCategoryMapping(
+        DealCategory.EVERYTHING_ELSE,
+        EvidenceProvenance(ProvenanceKind.UNKNOWN, "Unmapped eBay category; safe fallback"),
+        None,
+    )
+
+
+def map_ebay_category(
+    category_id: str | None,
+    ancestry: tuple[str, ...] = (),
+    *,
+    marketplace_id: str = "EBAY_US",
+) -> DealCategory:
+    return map_ebay_category_mapping(category_id, ancestry, marketplace_id=marketplace_id).category
 
 
 def _money(container: Any) -> Money:
@@ -56,7 +103,12 @@ def _safe_url(value: Any) -> str | None:
     return value
 
 
-def normalize_ebay_item(item: dict[str, Any]) -> tuple[DealOpportunity, CostComponent]:
+def normalize_ebay_item(
+    item: dict[str, Any],
+    *,
+    category_ancestry: dict[str, tuple[str, ...]] | None = None,
+    marketplace_id: str = "EBAY_US",
+) -> tuple[DealOpportunity, CostComponent]:
     item_id = item.get("itemId")
     title = item.get("title")
     if (
@@ -93,26 +145,41 @@ def normalize_ebay_item(item: dict[str, Any]) -> tuple[DealOpportunity, CostComp
     if isinstance(options, list) and options:
         try:
             shipping_money = _money(options[0].get("shippingCost"))
-            shipping = CostComponent.estimated(shipping_money.amount, shipping_money.currency)
+            shipping = CostComponent.estimated(
+                shipping_money.amount,
+                shipping_money.currency,
+                provenance=EvidenceProvenance(ProvenanceKind.SOURCE_API, "eBay Browse API"),
+            )
         except (AttributeError, ValueError):
             pass
+    category_key = str(category_id) if category_id is not None else None
+    mapping = map_ebay_category_mapping(
+        category_key,
+        (category_ancestry or {}).get(category_key or "", ()),
+        marketplace_id=marketplace_id,
+    )
     opportunity = DealOpportunity(
         source=SourceIdentity.EBAY,
         source_listing_id=item_id,
         title=title.strip(),
-        category=map_ebay_category(str(category_id) if category_id is not None else None),
+        category=mapping.category,
         base_price=price,
         url=_safe_url(item.get("itemWebUrl") or item.get("itemAffiliateWebUrl")),
         location_text=location_text,
         condition=str(item["condition"]).strip() if item.get("condition") else None,
         observed_at=observed_at,
         category_attributes={"ebay_category_id": str(category_id)} if category_id else {},
+        base_price_provenance=EvidenceProvenance(ProvenanceKind.SOURCE_API, "eBay Browse API"),
+        category_provenance=mapping.provenance,
     )
     return opportunity, shipping
 
 
 def normalize_search_results(
     body: dict[str, Any],
+    *,
+    category_ancestry: dict[str, tuple[str, ...]] | None = None,
+    marketplace_id: str = "EBAY_US",
 ) -> tuple[tuple[DealOpportunity, CostComponent], ...]:
     items = body.get("itemSummaries", [])
     if not isinstance(items, list):
@@ -122,7 +189,13 @@ def normalize_search_results(
         if not isinstance(item, dict):
             continue
         try:
-            results.append(normalize_ebay_item(item))
+            results.append(
+                normalize_ebay_item(
+                    item,
+                    category_ancestry=category_ancestry,
+                    marketplace_id=marketplace_id,
+                )
+            )
         except ValueError:
             continue
     return tuple(results)
