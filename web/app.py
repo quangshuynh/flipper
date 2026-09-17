@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from uuid import uuid4
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fastapi import HTTPException, Request
@@ -21,6 +22,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from acquisition import acquire_opportunity
 from deals.categories import DealCategory, normalize_category
+from deals.comparables import (
+    Comparable,
+    ComparableCondition,
+    ComparableType,
+)
 from deals.ebay import EBAY_CATEGORY_MAP, normalize_ebay_item, normalize_search_results
 from deals.economics import calculate_economics
 from deals.evaluation import ComparisonResult, DealEvaluation, compare
@@ -31,8 +37,11 @@ from deals.models import (
     EvidenceProvenance,
     ProvenanceKind,
     RiskFactor,
+    Money as DealMoney,
+    SourceIdentity,
     TimeToSale,
 )
+from deals.research import EphemeralResearchStore
 from ebay.compliance import app
 from ebay.discovery import DiscoveryConfig, EbayDiscoveryClient, EbayDiscoveryError
 from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
@@ -60,6 +69,8 @@ DEFAULT_DATABASE = ROOT / "data" / "flipper_inventory.db"
 load_dotenv(ROOT / ".env")
 templates = Jinja2Templates(directory=ROOT / "web" / "templates")
 app.mount("/static", StaticFiles(directory=ROOT / "web" / "static"), name="static")
+research_store = EphemeralResearchStore()
+RESEARCH_COOKIE = "flipper_research"
 
 
 def _store() -> InventoryStore:
@@ -230,6 +241,34 @@ async def _post_fields(request: Request) -> dict[str, str]:
 def _redirect(path: str, **params: str) -> RedirectResponse:
     target = f"{path}?{urlencode(params)}" if params else path
     return RedirectResponse(target, status_code=303)
+
+
+def _research_session(request: Request) -> str | None:
+    value = request.cookies.get(RESEARCH_COOKIE)
+    valid = value and len(value) == 32 and all(char in "0123456789abcdef" for char in value)
+    return value if valid else None
+
+
+def _research_key(item_id: str) -> str:
+    return f"ebay:{item_id}"
+
+
+def _comparable_from_fields(fields: dict[str, str], category: DealCategory) -> Comparable:
+    event_date = date.fromisoformat(fields["event_date"]) if fields.get("event_date") else None
+    return Comparable(
+        evidence_type=ComparableType(fields.get("evidence_type", "")),
+        source=fields.get("source", ""),
+        price=DealMoney.of(fields.get("price", ""), fields.get("currency", "")),
+        observed_date=date.fromisoformat(fields.get("observed_date", "")),
+        condition=ComparableCondition(fields.get("condition", "unknown")),
+        event_date=event_date,
+        source_identity=SourceIdentity(fields.get("source_identity", "other")),
+        source_reference_id=fields.get("source_reference_id"),
+        title=fields.get("title"),
+        source_url=fields.get("source_url"),
+        notes=fields.get("notes"),
+        category=category,
+    )
 
 
 @app.exception_handler(sqlite3.Error)
@@ -574,6 +613,9 @@ def deal_detail(request: Request, item_id: str):
             message="The eBay opportunity could not be loaded or an assumption was invalid.",
             status_code=503,
         )
+    evidence = research_store.evidence_set(
+        _research_session(request), _research_key(item_id), as_of=_today()
+    )
     return _render(
         request,
         "deal_detail.html",
@@ -583,6 +625,12 @@ def deal_detail(request: Request, item_id: str):
         shipping=shipping,
         evaluation=evaluation,
         values=values,
+        research_rows=research_store.list(_research_session(request), _research_key(item_id)),
+        evidence=evidence,
+        comparable_types=ComparableType,
+        comparable_conditions=ComparableCondition,
+        source_identities=SourceIdentity,
+        today=_today().isoformat(),
     )
 
 
@@ -645,12 +693,18 @@ def deal_compare(request: Request):
                 marketplace_id=marketplace,
             )
             evaluation = _deal_analysis(opportunity, shipping, values)
+            evidence = research_store.evidence_set(
+                _research_session(request), _research_key(item_id), as_of=_today()
+            )
             entries.append(
                 {
                     "item_id": item_id,
                     "opportunity": opportunity,
                     "shipping": shipping,
                     "evaluation": evaluation,
+                    "evidence": evidence,
+                    "sold_summaries": evidence.summaries(ComparableType.SOLD),
+                    "active_summaries": evidence.summaries(ComparableType.ACTIVE_ASKING),
                     "values": values,
                     "index": index,
                     "error": None,
@@ -680,6 +734,65 @@ def deal_compare(request: Request):
         pareto=pareto,
         error=None,
     )
+
+
+@app.post("/deals/ebay/{item_id}/comparables")
+async def comparable_add(request: Request, item_id: str):
+    fields = await _post_fields(request)
+    session_id = _research_session(request) or uuid4().hex
+    try:
+        client = _discovery()
+        ancestry, marketplace = _taxonomy(client)
+        opportunity, _ = normalize_ebay_item(
+            client.get_item(item_id), category_ancestry=ancestry, marketplace_id=marketplace
+        )
+        comparable = _comparable_from_fields(fields, opportunity.category)
+        research_store.add(session_id, _research_key(item_id), comparable)
+    except EbayDiscoveryError:
+        return _redirect(f"/deals/ebay/{item_id}", error_message="eBay discovery is unavailable.")
+    except (KeyError, TypeError, ValueError) as exc:
+        return _redirect(f"/deals/ebay/{item_id}", error_message=str(exc))
+    response = _redirect(f"/deals/ebay/{item_id}", message="Comparable added.")
+    response.set_cookie(RESEARCH_COOKIE, session_id, httponly=True, samesite="strict")
+    return response
+
+
+@app.post("/deals/ebay/{item_id}/comparables/{comparable_id}/edit")
+async def comparable_edit(request: Request, item_id: str, comparable_id: str):
+    fields = await _post_fields(request)
+    session_id = _research_session(request)
+    if not session_id:
+        return _redirect(f"/deals/ebay/{item_id}", error_message="Comparable record was not found.")
+    try:
+        client = _discovery()
+        ancestry, marketplace = _taxonomy(client)
+        opportunity, _ = normalize_ebay_item(
+            client.get_item(item_id), category_ancestry=ancestry, marketplace_id=marketplace
+        )
+        research_store.replace(
+            session_id,
+            _research_key(item_id),
+            comparable_id,
+            _comparable_from_fields(fields, opportunity.category),
+        )
+    except EbayDiscoveryError:
+        return _redirect(f"/deals/ebay/{item_id}", error_message="eBay discovery is unavailable.")
+    except (KeyError, LookupError, TypeError, ValueError) as exc:
+        return _redirect(f"/deals/ebay/{item_id}", error_message=str(exc))
+    return _redirect(f"/deals/ebay/{item_id}", message="Comparable updated.")
+
+
+@app.post("/deals/ebay/{item_id}/comparables/{comparable_id}/remove")
+async def comparable_remove(request: Request, item_id: str, comparable_id: str):
+    await _post_fields(request)
+    session_id = _research_session(request)
+    try:
+        if not session_id:
+            raise LookupError("comparable record was not found")
+        research_store.remove(session_id, _research_key(item_id), comparable_id)
+    except LookupError as exc:
+        return _redirect(f"/deals/ebay/{item_id}", error_message=str(exc))
+    return _redirect(f"/deals/ebay/{item_id}", message="Comparable removed.")
 
 
 @app.post("/deals/ebay/{item_id}/acquire")

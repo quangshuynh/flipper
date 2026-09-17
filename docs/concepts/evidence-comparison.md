@@ -54,3 +54,7 @@ Sold counts, sell-through, historical median prices, and market time-to-sale rem
 Flipper's inventory, valuations, lifecycle timestamps, sales, and reconciled costs are promising
 future evidence. Later work needs comparable attributes, complete lifecycle windows, sample-size
 disclosure, and currency compatibility before learning from those records.
+
+User-provided [comparable evidence](comparable-evidence.md) can now accompany each ephemeral
+opportunity. Sold and active asking summaries remain separate and currency-specific. They do not
+enter Pareto ranking, expected resale, liquidity, or confidence automatically.

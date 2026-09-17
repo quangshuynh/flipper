@@ -654,3 +654,86 @@ def test_comparison_isolates_disappeared_upstream_item(monkeypatch, tmp_path):
     )
     assert response.status_code == 200
     assert "upstream item is unavailable" in response.text
+
+
+def test_comparable_add_edit_remove_prg_and_no_url_fetch(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    discovery = _Discovery()
+    monkeypatch.setattr(web_app, "_discovery", lambda: discovery)
+    web_app.research_store.clear()
+    fields = {
+        "evidence_type": "sold",
+        "source": "Manual eBay research",
+        "source_identity": "ebay",
+        "price": "145.50",
+        "currency": "USD",
+        "condition": "used_tested",
+        "event_date": "2026-09-10",
+        "observed_date": "2026-09-17",
+        "title": "Comparable camera",
+        "source_url": "https://example.com/never-fetched",
+    }
+    added = client.post("/deals/ebay/v1%7C123%7C0/comparables", data=fields, follow_redirects=False)
+    assert added.status_code == 303
+    assert added.headers["location"].endswith("message=Comparable+added.")
+    assert (
+        "HttpOnly" in added.headers["set-cookie"]
+        and "SameSite=strict" in added.headers["set-cookie"]
+    )
+    detail = client.get(added.headers["location"])
+    assert "Sold evidence" in detail.text and "USD 145.50" in detail.text
+    assert "User research" in detail.text and "Not verified by Flipper" in detail.text
+    assert "Expected profit" in detail.text and "Needs assumptions" in detail.text
+    rows = next(iter(web_app.research_store._sessions.values()))["ebay:v1|123|0"]
+    comparable_id = rows[0].comparable_id
+    edited = client.post(
+        f"/deals/ebay/v1%7C123%7C0/comparables/{comparable_id}/edit",
+        data=fields | {"price": "150", "evidence_type": "active_asking", "event_date": ""},
+        follow_redirects=False,
+    )
+    assert edited.status_code == 303
+    changed = client.get(edited.headers["location"])
+    assert "Active asking evidence" in changed.text and "USD 150.00" in changed.text
+    removed = client.post(
+        f"/deals/ebay/v1%7C123%7C0/comparables/{comparable_id}/remove",
+        content="confirm=1",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+        follow_redirects=False,
+    )
+    assert removed.status_code == 303
+    assert "No sold evidence" in client.get(removed.headers["location"]).text
+
+
+def test_comparable_validation_cross_origin_and_independent_comparison(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(web_app, "_discovery", _ComparisonDiscovery)
+    web_app.research_store.clear()
+    base = {
+        "evidence_type": "sold",
+        "source": "Research",
+        "price": "75",
+        "currency": "USD",
+        "condition": "unknown",
+        "observed_date": "2026-09-17",
+    }
+    rejected = client.post(
+        "/deals/ebay/v1%7C10%7C0/comparables",
+        data=base,
+        headers={"origin": "https://attacker.example"},
+    )
+    unsafe = client.post(
+        "/deals/ebay/v1%7C10%7C0/comparables",
+        data=base | {"source_url": "http://unsafe.example"},
+        follow_redirects=False,
+    )
+    added = client.post("/deals/ebay/v1%7C10%7C0/comparables", data=base, follow_redirects=False)
+    compared = client.get(
+        "/deals/compare",
+        params=[("item_id", "v1|10|0"), ("item_id", "v1|20|0")],
+    )
+    assert rejected.status_code == 403
+    assert unsafe.status_code == added.status_code == 303
+    assert "source+URL+must+be+an+HTTPS" in unsafe.headers["location"]
+    assert compared.text.count("median USD 75.00") == 1
+    assert "Comps do not establish sell-through or duration" in compared.text
+    assert "winner" not in compared.text.lower()

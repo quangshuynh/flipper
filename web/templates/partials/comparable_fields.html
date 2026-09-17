@@ -1,0 +1,12 @@
+<label>Evidence type<select name="evidence_type" required>{% for item in comparable_types %}<option value="{{ item.value }}" {% if comp and comp.evidence_type == item %}selected{% endif %}>{{ item.value|replace('_', ' ')|title }}</option>{% endfor %}</select></label>
+<label>Source<input name="source" required maxlength="100" value="{{ comp.source if comp else '' }}" placeholder="eBay sold results, local dealer"></label>
+<label>Source identity<select name="source_identity">{% for item in source_identities %}<option value="{{ item.value }}" {% if comp and comp.source_identity == item %}selected{% endif %}>{{ item.value|replace('-', ' ')|title }}</option>{% endfor %}</select></label>
+<label>Price<input name="price" required inputmode="decimal" value="{{ comp.price.amount if comp else '' }}"></label>
+<label>Currency<input name="currency" required minlength="3" maxlength="3" value="{{ comp.price.currency if comp else opportunity.base_price.currency }}"></label>
+<label>Condition<select name="condition">{% for item in comparable_conditions %}<option value="{{ item.value }}" {% if comp and comp.condition == item %}selected{% endif %}>{{ item.value|replace('_', ' ')|title }}</option>{% endfor %}</select></label>
+<label>Event / sold date (optional)<input type="date" name="event_date" value="{{ comp.event_date if comp and comp.event_date else '' }}"></label>
+<label>Observed date<input type="date" name="observed_date" required value="{{ comp.observed_date if comp else today }}"></label>
+<label>Source reference ID (optional)<input name="source_reference_id" maxlength="200" value="{{ comp.source_reference_id if comp and comp.source_reference_id else '' }}"></label>
+<label>Title (optional)<input name="title" maxlength="300" value="{{ comp.title if comp and comp.title else '' }}"></label>
+<label>HTTPS source URL (optional)<input type="url" name="source_url" maxlength="2000" value="{{ comp.source_url if comp and comp.source_url else '' }}"></label>
+<label>Notes (optional)<textarea name="notes" maxlength="1000">{{ comp.notes if comp and comp.notes else '' }}</textarea></label>

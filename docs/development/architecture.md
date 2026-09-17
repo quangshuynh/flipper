@@ -18,3 +18,9 @@ The ephemeral `deals/` domain layers category/source normalization, `DealOpportu
 economics, evidence/risk, and dimension-preserving comparison. The legacy PC parser and estimator
 adapt into that domain but retain their existing behavior. Deal analysis does not touch the
 inventory schema or realized-accounting services.
+
+Comparable research is also ephemeral. A bounded process-memory store keys records by a random
+browser cookie and source opportunity identity. Durable research would require an explicit research
+aggregate and migration rather than rows attached to transient Browse results. A future
+inventory-owned version could reference Q-numbers after acquisition, but must first define whether
+research is a historical snapshot or mutable current evidence.
