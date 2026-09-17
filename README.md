@@ -399,6 +399,44 @@ Historical sell-through is intentionally deferred. The current schema stores the
 state but not complete period-opening inventory or status-transition history, so it cannot provide
 a defensible historical denominator without inventing data.
 
+## Valuation snapshots and actual results
+
+Valuation snapshots preserve what Flipper estimated at decision/acquisition time so later market
+updates or analyzer changes cannot rewrite history. The first snapshot attached to a Q-number is
+its baseline; a later analysis appends another immutable snapshot. Existing inventory is not
+backfilled because no historical estimates can be inferred safely.
+
+Attach the analyzer's typed numeric outputs to an authoritative Q-number (never a fuzzy title/date
+match), then inspect either the item's history or comparison report:
+
+```bash
+python main.py inventory attach-valuation Q0001 --market-value 500.00 \
+  --estimated-resale 450.00 --asking-price 250.00 --ideal-buy-price 300.00 \
+  --estimated-profit 200.00 --estimated-roi 0.8 --deal-score 78
+python main.py inventory valuation Q0001
+python main.py reports valuation
+```
+
+The durable fields mirror existing analyzer output: estimated market value, conservative expected
+resale, asking price, ideal buy price, estimated gross profit, ROI, deal score, analysis timestamp,
+currency, and a safe pricing-method label. Confidence and fee estimates are not stored because the
+current analyzer does not produce them. Currency amounts use exact scaled integers; no CLI text,
+raw API response, credential, buyer detail, or address is retained.
+
+For compatible currencies, resale error is actual gross minus estimated resale; absolute error is
+its magnitude; percentage error is resale error divided by estimated resale and is unavailable for
+a zero estimate. Recorded actual profit remains explicitly incomplete until all four economics
+categories are confirmed. The current estimated profit is gross resale minus asking price, while
+actual realized profit includes acquisition cost and recorded sale components, so profit error is
+explicitly unavailable rather than comparing unlike measures. Recorded incomplete profit is shown
+separately and is never called final. Unsold items and currency mismatches have no comparison, and
+Flipper performs no currency conversion.
+
+Analytics show the individual comparison when only one item is comparable. Multiple compatible
+items receive restrained aggregates; monetary aggregates are unavailable across mixed currencies,
+and zero estimates are excluded from percentage aggregates. Small samples should not be treated as
+predictive performance or used as automatic sourcing guidance.
+
 ## eBay account deletion notifications
 
 The isolated FastAPI service in `ebay/compliance.py` supports eBay Marketplace Account

@@ -38,6 +38,7 @@ def test_empty_database_initializes_versioned_schema(tmp_path):
             (4,),
             (5,),
             (6,),
+            (7,),
             (CURRENT_SCHEMA_VERSION,),
         ]
 
@@ -294,6 +295,7 @@ def test_v1_database_migrates_without_changing_existing_record(tmp_path):
             (5,),
             (6,),
             (7,),
+            (8,),
         ]
 
 
@@ -333,6 +335,10 @@ def test_v2_migration_rejects_duplicates_without_modifying_data(tmp_path):
         connection.execute("DROP TABLE sales")
         connection.execute("DROP TABLE sale_id_sequence")
         connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 8")
+        connection.execute("DROP TRIGGER valuation_snapshots_immutable_update")
+        connection.execute("DROP TRIGGER valuation_snapshots_immutable_delete")
+        connection.execute("DROP TABLE valuation_snapshots")
         connection.execute("DROP INDEX inventory_marketplace_sku")
         connection.execute(
             "CREATE INDEX inventory_marketplace_sku "

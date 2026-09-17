@@ -14,8 +14,10 @@ from inventory.store import (
     InventoryStore,
     SaleCostRecord,
     SaleRecord,
+    ValuationSnapshot,
 )
 from sales.economics import EconomicComponent, SaleEconomics, calculate_sale_economics
+from valuations import ValuationComparison, compare_valuation_to_sale
 
 ACTIVE_INVENTORY_STATUSES = frozenset({"acquired", "listed"})
 
@@ -72,6 +74,25 @@ class SalesReport:
 class SummaryReport:
     inventory: InventoryReport
     sales: SalesReport
+
+
+@dataclass(frozen=True)
+class ValuationReportRow:
+    inventory: InventoryRecord
+    baseline: ValuationSnapshot
+    sale: SaleRecord | None
+    reconciliation_state: str | None
+    comparison: ValuationComparison | None
+
+
+@dataclass(frozen=True)
+class ValuationAccuracyReport:
+    rows: tuple[ValuationReportRow, ...]
+    comparable_count: int
+    average_absolute_resale_error: Decimal | None
+    median_resale_error: Decimal | None
+    average_percentage_error: Decimal | None
+    aggregate_currency: str | None
 
 
 def _utc_date(value: str) -> date:
@@ -294,4 +315,73 @@ def build_summary_report(
             start=start,
             end=end,
         ),
+    )
+
+
+def valuation_accuracy_report(store: InventoryStore) -> ValuationAccuracyReport:
+    """Compare immutable baseline valuations with compatible durable sale results."""
+    inventory = store.list()
+    inventory_by_internal = {item.internal_id: item for item in inventory}
+    sale_by_inventory = {sale.inventory_internal_id: sale for sale in store.list_sales()}
+    costs_by_sale: dict[int, list[SaleCostRecord]] = defaultdict(list)
+    for cost in store.list_all_sale_costs():
+        costs_by_sale[cost.sale_internal_id].append(cost)
+    confirmations = store.list_reconciliation_confirmations()
+    rows: list[ValuationReportRow] = []
+    for baseline in (item for item in store.list_valuation_snapshots() if item.is_baseline):
+        item = inventory_by_internal[baseline.inventory_internal_id]
+        sale = sale_by_inventory.get(item.internal_id)
+        state = None
+        comparison = None
+        if sale is not None:
+            state, _ = _reconciliation_state(sale.internal_id, confirmations)
+            economics = None
+            if sale.currency == "USD":
+                components = costs_by_sale.get(sale.internal_id, [])
+                economics = calculate_sale_economics(
+                    gross=sale.gross_amount,
+                    acquisition_cost=item.acquisition_cost,
+                    currency=sale.currency,
+                    acquisition_currency="USD",
+                    components=[
+                        EconomicComponent(c.category, c.amount, c.currency, c.effect)
+                        for c in components
+                    ],
+                )
+            comparison = compare_valuation_to_sale(
+                estimated_resale=baseline.expected_resale_value,
+                estimated_profit=baseline.estimated_gross_profit,
+                estimate_currency=baseline.currency,
+                actual_gross=sale.gross_amount,
+                sale_currency=sale.currency,
+                recorded_actual_profit=(economics.recorded_profit if economics else None),
+                fully_reconciled=state == "fully_reconciled",
+            )
+        rows.append(ValuationReportRow(item, baseline, sale, state, comparison))
+    comparisons = [row.comparison for row in rows if row.comparison is not None]
+    percentages = [
+        value.resale_percentage_error
+        for value in comparisons
+        if value.resale_percentage_error is not None
+    ]
+    currencies = {value.currency for value in comparisons}
+    aggregate_currency = next(iter(currencies)) if len(currencies) == 1 else None
+    return ValuationAccuracyReport(
+        rows=tuple(rows),
+        comparable_count=len(comparisons),
+        average_absolute_resale_error=(
+            sum((value.absolute_resale_error for value in comparisons), Decimal(0))
+            / len(comparisons)
+            if comparisons and aggregate_currency is not None
+            else None
+        ),
+        median_resale_error=(
+            Decimal(str(median([value.resale_error for value in comparisons])))
+            if comparisons and aggregate_currency is not None
+            else None
+        ),
+        average_percentage_error=(
+            sum(percentages, Decimal(0)) / len(percentages) if percentages else None
+        ),
+        aggregate_currency=aggregate_currency,
     )
