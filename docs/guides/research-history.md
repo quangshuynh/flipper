@@ -33,7 +33,9 @@ a known zero remains zero.
 
 Variance is actual minus expected (ROI uses percentage points). It is descriptive, not a score,
 success label, or recommendation. Snapshots are never rewritten or recomputed when working research
-or formulas change. Modeled travel remains expected research; actual travel comparison is deferred.
+or formulas change. When actual sourcing travel is recorded on the linked Q-number, the comparison
+also covers round-trip miles, fuel, additional expense, total expense, and travel minutes. Partial
+actual data stays unknown where no fact exists.
 
 Research history is stored in the selected local inventory SQLite database. Schema version 11 adds
 a snapshot header plus a validated, canonical, versioned JSON payload. The header supports bounded

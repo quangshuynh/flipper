@@ -14,6 +14,7 @@ from inventory.store import (
     InventoryStore,
     SaleCostRecord,
     SaleRecord,
+    SourcingTravelRecord,
     ValuationSnapshot,
 )
 from sales.economics import EconomicComponent, SaleEconomics, calculate_sale_economics
@@ -191,6 +192,7 @@ def sales_report(
     sales: list[SaleRecord],
     costs: list[SaleCostRecord],
     confirmations: dict[int, frozenset[str]],
+    sourcing_travel: list[SourcingTravelRecord] | None = None,
     *,
     start: date | None = None,
     end: date | None = None,
@@ -198,6 +200,7 @@ def sales_report(
     """Build sale-level and aggregate economics using sale sold_at date filtering."""
     inventory_by_id = {record.internal_id: record for record in inventory}
     costs_by_sale: dict[int, list[SaleCostRecord]] = defaultdict(list)
+    travel_by_inventory = {row.inventory_internal_id: row for row in (sourcing_travel or [])}
     for cost in costs:
         costs_by_sale[cost.sale_internal_id].append(cost)
     selected = [sale for sale in sales if _in_date_range(_utc_date(sale.sold_at), start, end)]
@@ -235,11 +238,15 @@ def sales_report(
         economics = None
         margin = None
         if sale.currency == "USD":
+            travel = travel_by_inventory.get(item.internal_id)
             economics = calculate_sale_economics(
                 gross=sale.gross_amount,
                 acquisition_cost=item.acquisition_cost,
                 currency=sale.currency,
                 acquisition_currency="USD",
+                sourcing_travel_cost=(
+                    travel.recorded_expense if travel is not None else Decimal(0)
+                ),
                 components=[
                     EconomicComponent(
                         component.category,
@@ -312,6 +319,7 @@ def build_summary_report(
             sales,
             store.list_all_sale_costs(),
             store.list_reconciliation_confirmations(),
+            store.list_sourcing_travel(),
             start=start,
             end=end,
         ),
@@ -327,6 +335,7 @@ def valuation_accuracy_report(store: InventoryStore) -> ValuationAccuracyReport:
     for cost in store.list_all_sale_costs():
         costs_by_sale[cost.sale_internal_id].append(cost)
     confirmations = store.list_reconciliation_confirmations()
+    travel_by_inventory = {row.inventory_internal_id: row for row in store.list_sourcing_travel()}
     rows: list[ValuationReportRow] = []
     for baseline in (item for item in store.list_valuation_snapshots() if item.is_baseline):
         item = inventory_by_internal[baseline.inventory_internal_id]
@@ -343,6 +352,11 @@ def valuation_accuracy_report(store: InventoryStore) -> ValuationAccuracyReport:
                     acquisition_cost=item.acquisition_cost,
                     currency=sale.currency,
                     acquisition_currency="USD",
+                    sourcing_travel_cost=(
+                        travel_by_inventory[item.internal_id].recorded_expense
+                        if item.internal_id in travel_by_inventory
+                        else Decimal(0)
+                    ),
                     components=[
                         EconomicComponent(c.category, c.amount, c.currency, c.effect)
                         for c in components

@@ -174,6 +174,54 @@ def test_populated_dashboard_inventory_and_details(monkeypatch, tmp_path):
     assert "Tested and clean" in detail.text
 
 
+def test_inventory_actual_sourcing_travel_web_flow_and_origin(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    item = store.add(
+        title="Travel item", source="estate", acquired_at="2026-09-01", acquisition_cost="20"
+    )
+    assert (
+        "No actual sourcing travel recorded" in client.get(f"/inventory/{item.inventory_id}").text
+    )
+    rejected = client.post(
+        f"/inventory/{item.inventory_id}/sourcing-travel",
+        data={"fuel_cost": "3"},
+        headers={"Origin": "https://evil.example"},
+        follow_redirects=False,
+    )
+    assert rejected.status_code == 403
+    saved = client.post(
+        f"/inventory/{item.inventory_id}/sourcing-travel",
+        data={
+            "round_trip_miles": "14.5",
+            "fuel_cost": "3.25",
+            "additional_expense": "0",
+            "travel_minutes": "25",
+            "note": "actual receipt",
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    detail = client.get(saved.headers["location"])
+    assert "USD 3.25" in detail.text
+    assert "actual receipt" in detail.text
+    assert store.get_sourcing_travel(item.inventory_id).total_expense == Decimal("3.25")
+    invalid = client.post(
+        f"/inventory/{item.inventory_id}/sourcing-travel",
+        data={"fuel_cost": "-1"},
+        follow_redirects=False,
+    )
+    assert "error_message=" in invalid.headers["location"]
+    assert store.get_sourcing_travel(item.inventory_id).fuel_cost == Decimal("3.25")
+    assert client.get(f"/inventory/{item.inventory_id}/sourcing-travel").status_code == 405
+    cleared = client.post(
+        f"/inventory/{item.inventory_id}/sourcing-travel/clear",
+        data={"confirm": "1"},
+        follow_redirects=False,
+    )
+    assert cleared.status_code == 303
+    assert store.get_sourcing_travel(item.inventory_id) is None
+
+
 def test_sales_states_components_missing_categories_and_analytics(monkeypatch, tmp_path):
     client, store = _client(monkeypatch, tmp_path)
     _, incomplete = _sold(store, 1)

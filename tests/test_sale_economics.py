@@ -105,7 +105,7 @@ def test_v4_migration_preserves_sale_and_starts_with_zero_components(tmp_path):
     with sqlite3.connect(store.path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,), (11,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,), (11,), (12,)]
 
 
 @pytest.mark.parametrize(

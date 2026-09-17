@@ -22,6 +22,7 @@ class SaleEconomics:
 
     gross: Decimal
     acquisition_cost: Decimal
+    sourcing_travel_cost: Decimal
     components_by_category: dict[str, Decimal]
     increasing_by_category: dict[str, Decimal]
     recorded_profit: Decimal
@@ -35,6 +36,7 @@ def calculate_sale_economics(
     currency: str,
     acquisition_currency: str,
     components: list[EconomicComponent],
+    sourcing_travel_cost: Decimal = Decimal(0),
 ) -> SaleEconomics:
     """Calculate recorded profit without conversion or completeness claims.
 
@@ -58,10 +60,15 @@ def calculate_sale_economics(
             raise ValueError("component effect must be reduce or increase")
         target = totals if component.effect == "reduce" else increases
         target[component.category] = target.get(component.category, Decimal(0)) + component.amount
+    if not sourcing_travel_cost.is_finite() or sourcing_travel_cost < 0:
+        raise ValueError("sourcing travel cost must be finite and nonnegative")
     recorded_profit = (
         gross
         - acquisition_cost
+        - sourcing_travel_cost
         - sum(totals.values(), Decimal(0))
         + sum(increases.values(), Decimal(0))
     )
-    return SaleEconomics(gross, acquisition_cost, totals, increases, recorded_profit, currency)
+    return SaleEconomics(
+        gross, acquisition_cost, sourcing_travel_cost, totals, increases, recorded_profit, currency
+    )

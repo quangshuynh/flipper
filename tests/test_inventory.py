@@ -292,6 +292,7 @@ def test_v1_database_migrates_without_changing_existing_record(tmp_path):
             (9,),
             (10,),
             (11,),
+            (12,),
         ]
 
 
@@ -359,7 +360,7 @@ def test_v2_migration_rejects_duplicates_without_modifying_data(tmp_path):
         assert connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone() == (2,)
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (10,), (11,)]
+        ).fetchall() == [(1,), (2,), (10,), (11,), (12,)]
 
 
 def test_v10_migration_rejects_duplicate_ebay_item_ids(tmp_path):

@@ -27,6 +27,11 @@ class DecisionOutcome:
     resale: OutcomeMetric
     profit: OutcomeMetric
     roi: OutcomeMetric
+    travel_miles: OutcomeMetric
+    travel_fuel: OutcomeMetric
+    travel_additional: OutcomeMetric
+    travel_total: OutcomeMetric
+    travel_minutes: OutcomeMetric
     expected_minimum_days: int | None
     expected_maximum_days: int | None
     actual_holding_days: int | None
@@ -69,6 +74,21 @@ def _metric(expected, actual, *, currency=None) -> OutcomeMetric:
     return OutcomeMetric(expected, actual, difference, currency)
 
 
+def _trip_decimal(payload: dict, name: str) -> Decimal | None:
+    trip = payload.get("trip")
+    return _decimal(trip.get(name)) if isinstance(trip, dict) else None
+
+
+def _trip_money(payload: dict, name: str) -> tuple[Decimal | None, str | None]:
+    trip = payload.get("trip")
+    value = trip.get(name) if isinstance(trip, dict) else None
+    if name == "total_travel_cost" and isinstance(value, dict):
+        value = value.get("money")
+    if not isinstance(value, dict):
+        return None, None
+    return _decimal(value.get("amount")), value.get("currency")
+
+
 def build_decision_outcome(
     store: InventoryStore, snapshot: ResearchSnapshotRecord, *, today: date
 ) -> DecisionOutcome:
@@ -81,6 +101,9 @@ def build_decision_outcome(
     resale_currency = resale_currency or snapshot.currency
     profit_currency = profit_currency or snapshot.currency
     expected_roi = _decimal(payload.get("derived", {}).get("roi"))
+    expected_fuel, fuel_currency = _trip_money(payload, "estimated_fuel_cost")
+    expected_additional, additional_currency = _trip_money(payload, "additional_travel_cost")
+    expected_total, total_currency = _trip_money(payload, "total_travel_cost")
     time_range = payload.get("time_to_sale")
     minimum_days = time_range.get("minimum_days") if isinstance(time_range, dict) else None
     maximum_days = time_range.get("maximum_days") if isinstance(time_range, dict) else None
@@ -89,6 +112,13 @@ def build_decision_outcome(
         resale=_metric(expected_resale, None, currency=resale_currency),
         profit=_metric(expected_profit, None, currency=profit_currency),
         roi=_metric(expected_roi, None),
+        travel_miles=_metric(_trip_decimal(payload, "round_trip_miles"), None),
+        travel_fuel=_metric(expected_fuel, None, currency=fuel_currency or snapshot.currency),
+        travel_additional=_metric(
+            expected_additional, None, currency=additional_currency or snapshot.currency
+        ),
+        travel_total=_metric(expected_total, None, currency=total_currency or snapshot.currency),
+        travel_minutes=_metric(_trip_decimal(payload, "round_trip_minutes"), None),
         expected_minimum_days=minimum_days,
         expected_maximum_days=maximum_days,
         actual_holding_days=None,
@@ -98,6 +128,7 @@ def build_decision_outcome(
         return DecisionOutcome("not_linked", None, None, **empty)
 
     inventory = store.get(snapshot.inventory_id)
+    travel = store.get_sourcing_travel(inventory.inventory_id)
     all_sales = store.list_sales()
     held = inventory_report([inventory], all_sales, today=today).rows[0].days_held
     matching_sales = [s for s in all_sales if s.inventory_internal_id == inventory.internal_id]
@@ -106,9 +137,14 @@ def build_decision_outcome(
         matching_sales,
         store.list_all_sale_costs(),
         store.list_reconciliation_confirmations(),
+        store.list_sourcing_travel(),
     ).rows
     sale = sale_rows[0] if sale_rows else None
-    acquisition_actual = inventory.acquisition_cost if landed_currency == "USD" else None
+    acquisition_actual = (
+        inventory.acquisition_cost + (travel.recorded_expense if travel else Decimal(0))
+        if landed_currency == "USD"
+        else None
+    )
     resale_actual = (
         sale.sale.gross_amount if sale and resale_currency == sale.sale.currency else None
     )
@@ -118,8 +154,9 @@ def build_decision_outcome(
         else None
     )
     roi_actual = None
-    if sale and sale.economics and inventory.acquisition_cost != 0:
-        roi_actual = sale.economics.recorded_profit / inventory.acquisition_cost
+    actual_basis = inventory.acquisition_cost + (travel.recorded_expense if travel else Decimal(0))
+    if sale and sale.economics and actual_basis != 0:
+        roi_actual = sale.economics.recorded_profit / actual_basis
     range_position = None
     if sale and held is not None and minimum_days is not None and maximum_days is not None:
         range_position = (
@@ -137,6 +174,29 @@ def build_decision_outcome(
         _metric(expected_resale, resale_actual, currency=resale_currency),
         _metric(expected_profit, profit_actual, currency=profit_currency),
         _metric(expected_roi, roi_actual),
+        _metric(
+            _trip_decimal(payload, "round_trip_miles"),
+            travel.round_trip_miles if travel else None,
+        ),
+        _metric(
+            expected_fuel, travel.fuel_cost if travel else None, currency=fuel_currency or "USD"
+        ),
+        _metric(
+            expected_additional,
+            travel.additional_expense if travel else None,
+            currency=additional_currency or "USD",
+        ),
+        _metric(
+            expected_total,
+            travel.total_expense if travel else None,
+            currency=total_currency or "USD",
+        ),
+        _metric(
+            _trip_decimal(payload, "round_trip_minutes"),
+            Decimal(travel.travel_minutes)
+            if travel and travel.travel_minutes is not None
+            else None,
+        ),
         minimum_days,
         maximum_days,
         held if sale else None,

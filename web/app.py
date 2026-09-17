@@ -61,6 +61,7 @@ from inventory.store import (
     InventoryStore,
     ResearchSnapshotNotFoundError,
     ResearchSnapshotValidationError,
+    SourcingTravelValidationError,
     SaleNotFoundError,
 )
 from reports.service import (
@@ -147,6 +148,7 @@ def _load_reports(store: InventoryStore):
         sales,
         store.list_all_sale_costs(),
         store.list_reconciliation_confirmations(),
+        store.list_sourcing_travel(),
     )
     return inventory_view, sales_view
 
@@ -586,7 +588,40 @@ def inventory_detail(request: Request, inventory_id: str):
             None,
         ),
         attachments=_attachments(store).list(record.inventory_id),
+        sourcing_travel=store.get_sourcing_travel(record.inventory_id),
+        linked_snapshots=[
+            snapshot
+            for snapshot in store.list_research_snapshots()
+            if snapshot.inventory_id == record.inventory_id
+        ],
     )
+
+
+@app.post("/inventory/{inventory_id}/sourcing-travel")
+async def inventory_sourcing_travel_save(request: Request, inventory_id: str):
+    fields = await _post_fields(request)
+    try:
+        _store().set_sourcing_travel(
+            inventory_id,
+            round_trip_miles=fields.get("round_trip_miles"),
+            fuel_cost=fields.get("fuel_cost"),
+            additional_expense=fields.get("additional_expense"),
+            travel_minutes=fields.get("travel_minutes"),
+            note=fields.get("note", ""),
+        )
+    except (InventoryNotFoundError, SourcingTravelValidationError) as exc:
+        return _redirect(f"/inventory/{inventory_id}", error_message=str(exc))
+    return _redirect(f"/inventory/{inventory_id}", message="Actual sourcing travel saved.")
+
+
+@app.post("/inventory/{inventory_id}/sourcing-travel/clear")
+async def inventory_sourcing_travel_clear(request: Request, inventory_id: str):
+    await _post_fields(request)
+    try:
+        _store().clear_sourcing_travel(inventory_id)
+    except (InventoryNotFoundError, SourcingTravelValidationError) as exc:
+        return _redirect(f"/inventory/{inventory_id}", error_message=str(exc))
+    return _redirect(f"/inventory/{inventory_id}", message="Actual sourcing travel cleared.")
 
 
 @app.get("/inventory/{inventory_id}/attachments/{attachment_id}", response_class=FileResponse)
@@ -631,7 +666,13 @@ def sale_detail(request: Request, sale_id: str):
     except (SaleNotFoundError, InventoryNotFoundError) as exc:
         raise HTTPException(status_code=404, detail="Sale not found") from exc
     costs = store.list_sale_costs(sale.sale_id)
-    report = sales_report([item], [sale], costs, store.list_reconciliation_confirmations())
+    report = sales_report(
+        [item],
+        [sale],
+        costs,
+        store.list_reconciliation_confirmations(),
+        store.list_sourcing_travel(),
+    )
     valuation_row = next(
         (
             result

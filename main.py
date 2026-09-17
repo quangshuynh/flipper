@@ -1313,6 +1313,7 @@ def run_reports_command(args: argparse.Namespace) -> int:
                 store.list_sales(),
                 store.list_all_sale_costs(),
                 store.list_reconciliation_confirmations(),
+                store.list_sourcing_travel(),
                 start=start,
                 end=end,
             )
