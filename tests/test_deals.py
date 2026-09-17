@@ -256,3 +256,63 @@ def test_generalized_cli_prints_ephemeral_economics(capsys):
     output = capsys.readouterr().out
     assert "Expected net profit: USD 40.00" in output
     assert "Expected profit/day: USD 5.71 to USD 10.00" in output
+
+
+def test_cli_trip_components_feed_travel_once_and_print_context(capsys):
+    result = main(
+        [
+            "deals",
+            "analyze",
+            "--title",
+            "Estate find",
+            "--source",
+            "estate-sale",
+            "--category",
+            "electronics",
+            "--base-price",
+            "40",
+            "--expected-resale",
+            "100",
+            "--one-way-distance",
+            "10",
+            "--vehicle-mpg",
+            "20",
+            "--gas-price",
+            "4",
+            "--additional-travel-cost",
+            "1",
+            "--travel-minutes",
+            "45",
+        ]
+    )
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "Round-trip mileage: 20" in output
+    assert "Estimated fuel used: 1" in output
+    assert "Estimated fuel cost: USD 4.00" in output
+    assert "Total modeled travel cost: USD 5.00" in output
+    assert "Landed acquisition cost: USD 45.00" in output
+    assert "Expected net profit: USD 55.00" in output
+    assert "Round-trip travel time: 45 minutes" in output
+
+
+def test_cli_legacy_direct_travel_cost_remains_valid_and_conflict_is_rejected(capsys):
+    base = [
+        "deals",
+        "analyze",
+        "--title",
+        "Local find",
+        "--source",
+        "local",
+        "--category",
+        "electronics",
+        "--base-price",
+        "40",
+        "--travel-cost",
+        "5",
+    ]
+    assert main(base) == 0
+    assert "Landed acquisition cost: USD 45.00" in capsys.readouterr().out
+
+    assert main(base + ["--one-way-distance", "10"]) == 1
+    assert "cannot be combined" in capsys.readouterr().err

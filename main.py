@@ -17,7 +17,15 @@ from acquisition import acquire_from_analysis, analyze_listing
 from collectors.json_feed_collector import DEFAULT_JSON_PATH, fetch_listings
 from deals.categories import normalize_category
 from deals.economics import calculate_economics
-from deals.models import CostComponent, Money as DealMoney, SourceIdentity, TimeToSale
+from deals.models import (
+    CostComponent,
+    EvidenceProvenance,
+    Money as DealMoney,
+    ProvenanceKind,
+    SourceIdentity,
+    TimeToSale,
+)
+from deals.travel import trip_from_values
 from ebay.finance_reconciliation import (
     FinanceMatchStatus,
     reconcile_finance_transactions,
@@ -394,6 +402,11 @@ def build_parser() -> argparse.ArgumentParser:
     deal_analyze.add_argument("--tax", type=Decimal)
     deal_analyze.add_argument("--inbound-shipping", type=Decimal)
     deal_analyze.add_argument("--travel-cost", type=Decimal)
+    deal_analyze.add_argument("--one-way-distance", type=Decimal, dest="one_way_miles")
+    deal_analyze.add_argument("--vehicle-mpg", type=Decimal)
+    deal_analyze.add_argument("--gas-price", type=Decimal)
+    deal_analyze.add_argument("--additional-travel-cost", type=Decimal)
+    deal_analyze.add_argument("--travel-minutes", type=int, dest="round_trip_minutes")
     deal_analyze.add_argument("--other-acquisition-cost", type=Decimal)
     deal_analyze.add_argument("--expected-resale", type=Decimal)
     deal_analyze.add_argument("--selling-fees", type=Decimal)
@@ -574,16 +587,45 @@ def run_deals_command(args: argparse.Namespace) -> int:
             else None
         )
 
+        user_assumption = EvidenceProvenance(ProvenanceKind.USER_ASSUMPTION, "User assumption")
+
         def estimate(value: Decimal | None, *, unknown: bool = False) -> CostComponent:
             if value is not None:
-                return CostComponent.estimated(value, args.currency)
+                return CostComponent.estimated(value, args.currency, provenance=user_assumption)
             return CostComponent.unknown() if unknown else CostComponent.not_applicable()
+
+        component_trip_supplied = any(
+            value is not None
+            for value in (
+                args.one_way_miles,
+                args.vehicle_mpg,
+                args.gas_price,
+                args.additional_travel_cost,
+            )
+        )
+        if args.travel_cost is not None and component_trip_supplied:
+            raise ValueError("--travel-cost cannot be combined with component trip assumptions")
+        trip = None
+        if component_trip_supplied or args.round_trip_minutes is not None:
+            trip = trip_from_values(
+                currency=args.currency,
+                one_way_miles=args.one_way_miles,
+                vehicle_mpg=args.vehicle_mpg,
+                gas_price_per_gallon=args.gas_price,
+                additional_travel_cost=args.additional_travel_cost,
+                round_trip_minutes=args.round_trip_minutes,
+            )
+        travel_cost = (
+            trip.total_travel_cost
+            if trip is not None and component_trip_supplied
+            else estimate(args.travel_cost)
+        )
 
         economics = calculate_economics(
             base_price=DealMoney(args.base_price, args.currency),
             acquisition_tax=estimate(args.tax),
             inbound_shipping=estimate(args.inbound_shipping),
-            pickup_travel_cost=estimate(args.travel_cost),
+            pickup_travel_cost=travel_cost,
             other_acquisition_cost=estimate(args.other_acquisition_cost),
             expected_resale=estimate(args.expected_resale, unknown=True),
             selling_fees=estimate(args.selling_fees),
@@ -602,6 +644,21 @@ def run_deals_command(args: argparse.Namespace) -> int:
             print(f"{label}: {_format_deal_money(value)}")
         roi_display = economics.roi if economics.roi is not None else economics.roi_state.value
         print(f"Expected ROI: {roi_display}")
+        if trip:
+            print(
+                "Round-trip mileage: "
+                f"{trip.round_trip_miles if trip.round_trip_miles is not None else 'unknown'}"
+            )
+            print(
+                "Estimated fuel used: "
+                f"{trip.estimated_gallons if trip.estimated_gallons is not None else 'unknown'}"
+            )
+            print(f"Estimated fuel cost: {_format_deal_money(trip.estimated_fuel_cost)}")
+            print(f"Total modeled travel cost: {_format_deal_money(trip.total_travel_cost.money)}")
+            if trip.assumptions.round_trip_minutes is not None:
+                print(f"Round-trip travel time: {trip.assumptions.round_trip_minutes} minutes")
+            for missing in trip.missing_inputs:
+                print(f"Trip input needed: {missing}")
         if time_to_sale:
             print(f"Time to sale: {time_to_sale.minimum_days}-{time_to_sale.maximum_days} days")
         if economics.profit_velocity:

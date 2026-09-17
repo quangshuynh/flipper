@@ -792,6 +792,11 @@ def test_manual_opportunity_evaluate_compare_comparable_and_acquire(monkeypatch,
         params=[
             ("opportunity_key", f"manual:{opportunity_id}"),
             ("opportunity_key", "ebay:v1|123|0"),
+            ("d0_one_way_miles", "12"),
+            ("d0_vehicle_mpg", "24"),
+            ("d0_gas_price", "4"),
+            ("d0_additional_travel_cost", "2"),
+            ("d0_round_trip_minutes", "50"),
         ],
     )
     missing = client.post(
@@ -812,6 +817,8 @@ def test_manual_opportunity_evaluate_compare_comparable_and_acquire(monkeypatch,
     assert "Needs assumptions" in detail.text
     assert "USD 50.00" in analyzed.text
     assert "Estate Sale" in compared.text and "eBay" in compared.text
+    assert "24 miles" in compared.text and "USD 6.00" in compared.text
+    assert "50 minutes" in compared.text
     assert "actual+acquisition+cost" in missing.headers["location"]
     assert acquired.headers["location"].startswith("/inventory/Q0001")
     record = store.get("Q0001")
@@ -865,3 +872,76 @@ def test_discovery_failures_are_distinct_and_sanitized():
     )
     assert "authentication was rejected" in rejected
     assert "secret-token-value" not in rejected
+
+
+def test_manual_trip_economics_render_validate_and_do_not_become_actual_cost(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    web_app.research_store.clear()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("trip inputs must not cause an external request")
+
+    monkeypatch.setattr("requests.sessions.Session.request", forbidden)
+    created = client.post(
+        "/deals/opportunities",
+        data={
+            "source": "facebook-marketplace",
+            "title": "Local camera",
+            "category": "electronics",
+            "base_price": "20.25",
+            "currency": "USD",
+            "inbound_shipping": "1.75",
+            "condition": "used_tested",
+        },
+        follow_redirects=False,
+    )
+    path = created.headers["location"].split("?", 1)[0]
+    analyzed = client.get(
+        path,
+        params={
+            "tax": "0",
+            "other_acquisition_cost": "0",
+            "expected_resale": "80",
+            "selling_fees": "8",
+            "outbound_shipping": "0",
+            "other_selling_cost": "0",
+            "one_way_miles": "10",
+            "vehicle_mpg": "20",
+            "gas_price": "4",
+            "additional_travel_cost": "1",
+            "round_trip_minutes": "45",
+        },
+    )
+    invalid = client.get(
+        path,
+        params={"one_way_miles": "10", "vehicle_mpg": "0", "gas_price": "4"},
+    )
+    conflict = client.get(
+        path,
+        params={"travel_cost": "5", "one_way_miles": "10"},
+    )
+    acquired = client.post(
+        f"{path}/acquire",
+        data={
+            "acquisition_cost": "18.00",
+            "acquired_at": "2026-09-17",
+            "acquisition_source": "Facebook Marketplace",
+        },
+        follow_redirects=False,
+    )
+
+    assert analyzed.status_code == 200
+    assert "20 miles" in analyzed.text
+    assert "Estimated fuel used" in analyzed.text and "gallons" in analyzed.text
+    assert "USD 4.00" in analyzed.text
+    assert "USD 5.00" in analyzed.text
+    assert "USD 27.00" in analyzed.text
+    assert "USD 45.00" in analyzed.text
+    assert "45 minutes" in analyzed.text
+    assert invalid.status_code == conflict.status_code == 400
+    assert 'value="0"' in invalid.text
+    assert "vehicle MPG must be greater than 0" in invalid.text
+    assert "cannot be combined" in conflict.text
+    record = store.get(acquired.headers["location"].split("/inventory/", 1)[1].split("?", 1)[0])
+    assert record.acquisition_cost_cents == 1800
+    assert "fuel" not in record.notes.casefold()
