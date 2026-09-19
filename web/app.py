@@ -66,6 +66,7 @@ from inventory.store import (
     ResearchSnapshotNotFoundError,
     ResearchSnapshotValidationError,
     SourcingTravelValidationError,
+    SaleCostValidationError,
     SaleNotFoundError,
 )
 from reports.service import (
@@ -596,7 +597,7 @@ def inventory_page(
 
 
 @app.get("/inventory/{inventory_id}", response_class=HTMLResponse)
-def inventory_detail(request: Request, inventory_id: str):
+def inventory_detail(request: Request, inventory_id: str, edit_notes: bool = False):
     store = _store()
     try:
         record = store.get(inventory_id)
@@ -619,6 +620,7 @@ def inventory_detail(request: Request, inventory_id: str):
         section="inventory",
         title=record.inventory_id,
         row=row,
+        edit_notes=edit_notes,
         sale_row=sale_row,
         valuation=store.baseline_valuation(record.inventory_id),
         valuation_comparison=next(
@@ -700,7 +702,13 @@ def sales_page(request: Request, state: str = ""):
 
 
 @app.get("/sales/{sale_id}", response_class=HTMLResponse)
-def sale_detail(request: Request, sale_id: str, message: str = "", error_message: str = ""):
+def sale_detail(
+    request: Request,
+    sale_id: str,
+    message: str = "",
+    error_message: str = "",
+    edit_accounting: bool = False,
+):
     store = _store()
     try:
         sale = store.get_sale(sale_id)
@@ -732,6 +740,7 @@ def sale_detail(request: Request, sale_id: str, message: str = "", error_message
         error_message=error_message,
         row=report.rows[0],
         costs=costs,
+        edit_accounting=edit_accounting,
         valuation_row=valuation_row,
         linked_snapshots=[
             snapshot
@@ -739,6 +748,57 @@ def sale_detail(request: Request, sale_id: str, message: str = "", error_message
             if snapshot.inventory_id == item.inventory_id
         ],
     )
+
+
+_ACCOUNTING_CATEGORIES = {
+    "fees": "marketplace_fee",
+    "shipping": "shipping_cost",
+    "refunds": "refund",
+    "adjustments": "other_adjustment",
+}
+
+
+@app.post("/sales/{sale_id}/accounting")
+async def sale_accounting_update(request: Request, sale_id: str):
+    """Record or confirm one existing sale-accounting category."""
+    fields = await _post_fields(request)
+    category = fields.get("category", "")
+    action = fields.get("action", "")
+    if category not in _ACCOUNTING_CATEGORIES or action not in {
+        "record",
+        "confirm_zero",
+        "confirm_existing",
+        "unknown",
+    }:
+        return _redirect(f"/sales/{sale_id}", error_message="Invalid accounting action.")
+    store = _store()
+    try:
+        if action == "record":
+            amount = Decimal(fields.get("amount", ""))
+            if not amount.is_finite() or amount <= 0:
+                raise SaleCostValidationError(
+                    "Enter a positive amount, or use Confirm zero when the reviewed amount is zero."
+                )
+            effect = fields.get("effect", "reduce") if category == "adjustments" else "reduce"
+            store.add_sale_cost(
+                sale_id,
+                category=_ACCOUNTING_CATEGORIES[category],
+                amount=amount,
+                note=fields.get("note", ""),
+                effect=effect,
+            )
+            store.set_reconciliation_confirmation(sale_id, category, confirmed=True)
+        else:
+            store.set_reconciliation_confirmation(sale_id, category, confirmed=action != "unknown")
+    except (ArithmeticError, SaleCostValidationError, SaleNotFoundError, ValueError) as exc:
+        return _redirect(f"/sales/{sale_id}", error_message=str(exc), edit_accounting="true")
+    messages = {
+        "record": "Accounting component recorded and category confirmed.",
+        "confirm_zero": "Category confirmed as zero or not applicable.",
+        "confirm_existing": "Existing accounting components confirmed as reviewed.",
+        "unknown": "Category reset to unknown.",
+    }
+    return _redirect(f"/sales/{sale_id}", message=messages[action])
 
 
 @app.get("/analytics", response_class=HTMLResponse)
