@@ -312,6 +312,7 @@ def test_v1_database_migrates_without_changing_existing_record(tmp_path):
             (10,),
             (11,),
             (12,),
+            (13,),
         ]
 
 
@@ -379,7 +380,63 @@ def test_v2_migration_rejects_duplicates_without_modifying_data(tmp_path):
         assert connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone() == (2,)
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (10,), (11,), (12,)]
+        ).fetchall() == [(1,), (2,), (10,), (11,), (12,), (13,)]
+
+
+def test_v13_migration_preserves_records_and_allows_unknown_acquisition(tmp_path):
+    database = tmp_path / "inventory.db"
+    store = InventoryStore(database)
+    known = store.add(**values(marketplace="ebay", marketplace_sku="Q0001"))
+    store.transition_status(known.inventory_id, "listed")
+    sale, _ = store.import_sale(
+        inventory_id=known.inventory_id,
+        marketplace="ebay",
+        external_order_id="order-1",
+        external_line_item_id="line-1",
+        marketplace_sku="Q0001",
+        quantity=1,
+        gross_amount=Decimal("25"),
+        currency="USD",
+        sold_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 13")
+        connection.execute(
+            """CREATE TABLE inventory_items_v12 (
+                internal_id INTEGER PRIMARY KEY,
+                inventory_id TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+                source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+                acquired_at TEXT NOT NULL CHECK (date(acquired_at) = acquired_at),
+                acquisition_cost_cents INTEGER NOT NULL CHECK (acquisition_cost_cents >= 0),
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                notes TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL CHECK (status IN ('acquired','listed','sold','archived')),
+                marketplace TEXT, marketplace_item_id TEXT, marketplace_sku TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                listed_at TEXT, sold_at TEXT
+            )"""
+        )
+        connection.execute("INSERT INTO inventory_items_v12 SELECT * FROM inventory_items")
+        connection.execute("DROP TABLE inventory_items")
+        connection.execute("ALTER TABLE inventory_items_v12 RENAME TO inventory_items")
+
+    store.initialize()
+    assert store.get(known.inventory_id).acquisition_cost == known.acquisition_cost
+    assert store.get_sale(sale.sale_id) == sale
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    unknown, _ = store.adopt_ebay_listing(
+        "Q0002",
+        title="Unknown history",
+        source=None,
+        acquired_at=None,
+        acquisition_cost=None,
+        marketplace_item_id="item-2",
+        marketplace_sku="Q0002",
+    )
+    assert (unknown.source, unknown.acquired_at, unknown.acquisition_cost) == (None, None, None)
 
 
 def test_v10_migration_rejects_duplicate_ebay_item_ids(tmp_path):

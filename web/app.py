@@ -540,10 +540,26 @@ def inventory_page(
     elif linkage == "unlinked":
         rows = [row for row in rows if not row.record.marketplace_item_id]
     sorters = {
-        "acquired_desc": lambda row: (row.record.acquired_at, row.record.internal_id),
-        "acquired_asc": lambda row: (row.record.acquired_at, row.record.internal_id),
-        "cost_desc": lambda row: (row.record.acquisition_cost_cents, row.record.internal_id),
-        "cost_asc": lambda row: (row.record.acquisition_cost_cents, row.record.internal_id),
+        "acquired_desc": lambda row: (
+            row.record.acquired_at is not None,
+            row.record.acquired_at or "",
+            row.record.internal_id,
+        ),
+        "acquired_asc": lambda row: (
+            row.record.acquired_at is None,
+            row.record.acquired_at or "",
+            row.record.internal_id,
+        ),
+        "cost_desc": lambda row: (
+            row.record.acquisition_cost_cents is not None,
+            row.record.acquisition_cost_cents or 0,
+            row.record.internal_id,
+        ),
+        "cost_asc": lambda row: (
+            row.record.acquisition_cost_cents is None,
+            row.record.acquisition_cost_cents or 0,
+            row.record.internal_id,
+        ),
         "age_desc": lambda row: (row.days_held if row.days_held is not None else -1),
         "q_asc": lambda row: row.record.internal_id,
         "q_desc": lambda row: row.record.internal_id,
@@ -1180,6 +1196,18 @@ async def comparable_add(request: Request, item_id: str):
     return response
 
 
+@app.post("/inventory/{inventory_id}/notes")
+async def inventory_notes_update(request: Request, inventory_id: str):
+    fields = await _post_fields(request)
+    try:
+        record = _store().update(inventory_id, notes=fields.get("notes", ""))
+    except InventoryNotFoundError:
+        return _redirect("/inventory", error_message="Inventory item was not found.")
+    except InventoryValidationError as exc:
+        return _redirect(f"/inventory/{inventory_id}", error_message=str(exc))
+    return _redirect(f"/inventory/{record.inventory_id}", message="Notes saved.")
+
+
 @app.post("/deals/ebay/{item_id}/comparables/{comparable_id}/edit")
 async def comparable_edit(request: Request, item_id: str, comparable_id: str):
     fields = await _post_fields(request)
@@ -1404,9 +1432,6 @@ async def ebay_listing_import(request: Request):
     required = {
         "item_id": "listing identity",
         "sku": "Q-number",
-        "source": "acquisition source",
-        "acquired_at": "acquisition date",
-        "acquisition_cost": "acquisition cost",
     }
     missing = [label for name, label in required.items() if not fields.get(name)]
     if missing:
@@ -1419,9 +1444,9 @@ async def ebay_listing_import(request: Request):
             results,
             item_id=fields["item_id"],
             sku=fields["sku"],
-            source=fields["source"],
-            acquired_at=fields["acquired_at"],
-            acquisition_cost=fields["acquisition_cost"],
+            source=fields.get("source"),
+            acquired_at=fields.get("acquired_at"),
+            acquisition_cost=fields.get("acquisition_cost"),
         )
     except (SellerOAuthError, ActiveListingsApiError) as exc:
         return _redirect("/ebay/listings", error_message=_safe_ebay_error(exc))

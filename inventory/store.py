@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from deals.snapshots import canonical_snapshot_json, parse_snapshot_json, validate_snapshot_payload
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
@@ -100,9 +100,9 @@ class InventoryRecord:
     internal_id: int
     inventory_id: str
     title: str
-    source: str
-    acquired_at: str
-    acquisition_cost_cents: int
+    source: str | None
+    acquired_at: str | None
+    acquisition_cost_cents: int | None
     quantity: int
     notes: str
     status: str
@@ -113,7 +113,9 @@ class InventoryRecord:
     sold_at: str | None
 
     @property
-    def acquisition_cost(self) -> Decimal:
+    def acquisition_cost(self) -> Decimal | None:
+        if self.acquisition_cost_cents is None:
+            return None
         return Decimal(self.acquisition_cost_cents) / 100
 
 
@@ -310,6 +312,23 @@ class InventoryStore:
         """Apply all pending migrations in order."""
         connection = self._connect()
         try:
+            has_migrations = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+            ).fetchone()
+            migrating_existing_inventory = bool(
+                has_migrations
+                and connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = 12"
+                ).fetchone()
+                and not connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = 13"
+                ).fetchone()
+            )
+            if migrating_existing_inventory:
+                # The v13 table rebuild temporarily removes the referenced parent table.
+                # Disable enforcement before the transaction, then verify every foreign key
+                # against the replacement table before committing.
+                connection.execute("PRAGMA foreign_keys = OFF")
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS schema_migrations "
@@ -745,6 +764,63 @@ class InventoryStore:
                     )"""
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (12)")
+            if 13 not in versions:
+                # SQLite cannot remove NOT NULL constraints in place. Rebuild only the
+                # inventory table while preserving identifiers, timestamps, and all rows.
+                connection.execute(
+                    """CREATE TABLE inventory_items_v13 (
+                        internal_id INTEGER PRIMARY KEY,
+                        inventory_id TEXT NOT NULL UNIQUE,
+                        title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+                        source TEXT CHECK (source IS NULL OR length(trim(source)) > 0),
+                        acquired_at TEXT CHECK (
+                            acquired_at IS NULL OR date(acquired_at) = acquired_at),
+                        acquisition_cost_cents INTEGER CHECK (
+                            acquisition_cost_cents IS NULL OR acquisition_cost_cents >= 0),
+                        quantity INTEGER NOT NULL CHECK (quantity > 0),
+                        notes TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL
+                            CHECK (status IN ('acquired', 'listed', 'sold', 'archived')),
+                        marketplace TEXT,
+                        marketplace_item_id TEXT,
+                        marketplace_sku TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        listed_at TEXT CHECK (
+                            listed_at IS NULL OR
+                            (length(listed_at) = 20 AND substr(listed_at, 11, 1) = 'T'
+                             AND substr(listed_at, -1) = 'Z')),
+                        sold_at TEXT CHECK (
+                            sold_at IS NULL OR
+                            (length(sold_at) = 20 AND substr(sold_at, 11, 1) = 'T'
+                             AND substr(sold_at, -1) = 'Z'))
+                    )"""
+                )
+                connection.execute(
+                    """INSERT INTO inventory_items_v13 (
+                        internal_id, inventory_id, title, source, acquired_at,
+                        acquisition_cost_cents, quantity, notes, status, marketplace,
+                        marketplace_item_id, marketplace_sku, created_at, listed_at, sold_at
+                    ) SELECT internal_id, inventory_id, title, source, acquired_at,
+                             acquisition_cost_cents, quantity, notes, status, marketplace,
+                             marketplace_item_id, marketplace_sku, created_at, listed_at, sold_at
+                      FROM inventory_items"""
+                )
+                connection.execute("DROP TABLE inventory_items")
+                connection.execute("ALTER TABLE inventory_items_v13 RENAME TO inventory_items")
+                connection.execute(
+                    """CREATE UNIQUE INDEX inventory_marketplace_sku
+                    ON inventory_items (marketplace COLLATE NOCASE, marketplace_sku)
+                    WHERE marketplace IS NOT NULL AND marketplace_sku IS NOT NULL"""
+                )
+                connection.execute(
+                    """CREATE UNIQUE INDEX inventory_ebay_item_id
+                    ON inventory_items (marketplace_item_id)
+                    WHERE marketplace = 'ebay' COLLATE NOCASE AND marketplace_item_id IS NOT NULL"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (13)")
+            foreign_key_violation = connection.execute("PRAGMA foreign_key_check").fetchone()
+            if foreign_key_violation is not None:
+                raise RuntimeError("inventory migration failed foreign-key integrity validation")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -770,25 +846,37 @@ class InventoryStore:
         self,
         *,
         title: str,
-        source: str,
-        acquired_at: str,
-        acquisition_cost: str | Decimal,
+        source: str | None,
+        acquired_at: str | None,
+        acquisition_cost: str | Decimal | None,
         quantity: int,
         notes: str,
         status: str,
         marketplace: str | None,
         marketplace_item_id: str | None,
         marketplace_sku: str | None,
+        allow_unknown_acquisition: bool = False,
     ) -> dict[str, object]:
         title = self._required(title, "title")
-        source = self._required(source, "source")
-        try:
-            parsed_date = date.fromisoformat(acquired_at)
-        except (TypeError, ValueError) as exc:
-            raise InventoryValidationError("acquired-at must use YYYY-MM-DD") from exc
-        if parsed_date.isoformat() != acquired_at:
-            raise InventoryValidationError("acquired-at must use YYYY-MM-DD")
-        cost_cents = parse_usd_cents(acquisition_cost)
+        source = (
+            self._optional(source)
+            if allow_unknown_acquisition
+            else self._required(source, "source")
+        )
+        if acquired_at in (None, "") and allow_unknown_acquisition:
+            acquired_at = None
+        else:
+            try:
+                parsed_date = date.fromisoformat(acquired_at)  # type: ignore[arg-type]
+            except (TypeError, ValueError) as exc:
+                raise InventoryValidationError("acquired-at must use YYYY-MM-DD") from exc
+            if parsed_date.isoformat() != acquired_at:
+                raise InventoryValidationError("acquired-at must use YYYY-MM-DD")
+        cost_cents = (
+            None
+            if acquisition_cost in (None, "") and allow_unknown_acquisition
+            else parse_usd_cents(acquisition_cost)  # type: ignore[arg-type]
+        )
         if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
             raise InventoryValidationError("quantity must be a positive integer")
         if status not in VALID_STATUSES:
@@ -854,9 +942,9 @@ class InventoryStore:
         inventory_id: str,
         *,
         title: str,
-        source: str,
-        acquired_at: str,
-        acquisition_cost: str | Decimal,
+        source: str | None,
+        acquired_at: str | None,
+        acquisition_cost: str | Decimal | None,
         marketplace_item_id: str,
         marketplace_sku: str,
         quantity: int = 1,
@@ -878,6 +966,7 @@ class InventoryStore:
             marketplace="ebay",
             marketplace_item_id=marketplace_item_id,
             marketplace_sku=marketplace_sku,
+            allow_unknown_acquisition=True,
         )
         self.initialize()
         connection = self._connect()
@@ -1075,6 +1164,12 @@ class InventoryStore:
             raise InventoryValidationError(
                 "status cannot be changed by a generic update; use the lifecycle transition"
             )
+        if source is not _UNSET and (not isinstance(source, str) or not source.strip()):
+            raise InventoryValidationError("source is required")
+        if acquired_at is not _UNSET and acquired_at in (None, ""):
+            raise InventoryValidationError("acquired-at must use YYYY-MM-DD")
+        if acquisition_cost is not _UNSET and acquisition_cost in (None, ""):
+            raise InventoryValidationError("acquisition cost must be a valid USD amount")
         self.initialize()
         connection = self._connect()
         try:
@@ -1100,7 +1195,11 @@ class InventoryStore:
                 "title": row["title"],
                 "source": row["source"],
                 "acquired_at": row["acquired_at"],
-                "acquisition_cost": Decimal(row["acquisition_cost_cents"]) / 100,
+                "acquisition_cost": (
+                    Decimal(row["acquisition_cost_cents"]) / 100
+                    if row["acquisition_cost_cents"] is not None
+                    else None
+                ),
                 "quantity": row["quantity"],
                 "notes": row["notes"],
                 "status": row["status"],
@@ -1112,7 +1211,7 @@ class InventoryStore:
                 name: existing[name] if value is _UNSET else value
                 for name, value in changes.items()
             }
-            values = self._validate_values(**candidate)
+            values = self._validate_values(**candidate, allow_unknown_acquisition=True)
             connection.execute(
                 """UPDATE inventory_items SET
                     title = ?, source = ?, acquired_at = ?, acquisition_cost_cents = ?,

@@ -37,7 +37,7 @@ class InventoryReport:
     rows: tuple[InventoryReportRow, ...]
     status_counts: dict[str, int]
     active_count: int
-    active_capital_usd: Decimal
+    active_capital_usd: Decimal | None
     average_active_acquisition_cost_usd: Decimal | None
     average_listed_age_days: Decimal | None
     oldest_active: InventoryReportRow | None
@@ -46,7 +46,7 @@ class InventoryReport:
 @dataclass(frozen=True)
 class SaleReportRow:
     sale: SaleRecord
-    acquisition_cost_usd: Decimal
+    acquisition_cost_usd: Decimal | None
     reducing_costs: Decimal
     increasing_credits: Decimal
     economics: SaleEconomics | None
@@ -60,7 +60,7 @@ class SaleReportRow:
 class SalesReport:
     rows: tuple[SaleReportRow, ...]
     gross_by_currency: dict[str, Decimal]
-    acquisition_cost_usd: Decimal
+    acquisition_cost_usd: Decimal | None
     reducing_by_currency: dict[str, Decimal]
     increasing_by_currency: dict[str, Decimal]
     recorded_profit_by_currency: dict[str, Decimal]
@@ -158,15 +158,20 @@ def inventory_report(
     selected = [
         record
         for record in inventory
-        if _in_date_range(date.fromisoformat(record.acquired_at), start, end)
+        if (start is None and end is None)
+        or (
+            record.acquired_at is not None
+            and _in_date_range(date.fromisoformat(record.acquired_at), start, end)
+        )
     ]
     rows: list[InventoryReportRow] = []
     for record in selected:
-        acquired = date.fromisoformat(record.acquired_at)
+        acquired = date.fromisoformat(record.acquired_at) if record.acquired_at else None
         held_end = _utc_date(record.sold_at) if record.sold_at else today
         days_held = (
             _days_between(acquired, held_end)
-            if record.status in ACTIVE_INVENTORY_STATUSES or record.status == "sold"
+            if acquired is not None
+            and (record.status in ACTIVE_INVENTORY_STATUSES or record.status == "sold")
             else None
         )
         listed_age = (
@@ -184,10 +189,17 @@ def inventory_report(
         )
 
     active_rows = [row for row in rows if row.record.status in ACTIVE_INVENTORY_STATUSES]
-    active_capital = sum((row.record.acquisition_cost for row in active_rows), Decimal(0))
+    known_active_costs = [
+        row.record.acquisition_cost
+        for row in active_rows
+        if row.record.acquisition_cost is not None
+    ]
+    active_capital = (
+        sum(known_active_costs, Decimal(0)) if len(known_active_costs) == len(active_rows) else None
+    )
     listed_ages = [row.listed_age_days for row in rows if row.listed_age_days is not None]
     oldest_active = min(
-        active_rows,
+        (row for row in active_rows if row.record.acquired_at is not None),
         key=lambda row: (row.record.acquired_at, row.record.internal_id),
         default=None,
     )
@@ -197,7 +209,9 @@ def inventory_report(
         active_count=len(active_rows),
         active_capital_usd=active_capital,
         average_active_acquisition_cost_usd=(
-            active_capital / len(active_rows) if active_rows else None
+            active_capital / len(active_rows)
+            if active_rows and active_capital is not None
+            else None
         ),
         average_listed_age_days=_mean(listed_ages),
         oldest_active=oldest_active,
@@ -246,7 +260,7 @@ def sales_report(
         {"incomplete": 0, "partially_reconciled": 0, "fully_reconciled": 0}
     )
     held_days: list[int] = []
-    acquisition_cost = Decimal(0)
+    acquisition_cost: Decimal | None = Decimal(0)
 
     for sale in selected:
         item = inventory_by_id[sale.inventory_internal_id]
@@ -264,10 +278,13 @@ def sales_report(
         gross[sale.currency] += sale.gross_amount
         reducing[sale.currency] += reducing_total
         increasing[sale.currency] += increasing_total
-        acquisition_cost += item.acquisition_cost
+        if item.acquisition_cost is None:
+            acquisition_cost = None
+        elif acquisition_cost is not None:
+            acquisition_cost += item.acquisition_cost
         economics = None
         margin = None
-        if sale.currency == "USD":
+        if sale.currency == "USD" and item.acquisition_cost is not None:
             travel = travel_by_inventory.get(item.internal_id)
             economics = calculate_sale_economics(
                 gross=sale.gross_amount,
@@ -296,7 +313,11 @@ def sales_report(
             target[sale.currency] += economics.recorded_profit
             if sale.gross_amount > 0:
                 margin = economics.recorded_profit / sale.gross_amount
-        days_held = _days_between(date.fromisoformat(item.acquired_at), _utc_date(sale.sold_at))
+        days_held = (
+            _days_between(date.fromisoformat(item.acquired_at), _utc_date(sale.sold_at))
+            if item.acquired_at is not None
+            else None
+        )
         if days_held is not None:
             held_days.append(days_held)
         rows.append(
@@ -428,7 +449,7 @@ def historical_insights(
     category_rows: dict[str, list[SaleReportRow]] = defaultdict(list)
     for row in report.rows:
         item = inventory_by_id[row.sale.inventory_internal_id]
-        source_rows[item.source].append(row)
+        source_rows[item.source or "Unknown"].append(row)
         categories = category_values.get(item.inventory_id, set())
         category = next(iter(categories)) if len(categories) == 1 else "Unknown"
         category_rows[category].append(row)
@@ -467,7 +488,7 @@ def valuation_accuracy_report(store: InventoryStore) -> ValuationAccuracyReport:
         if sale is not None:
             state, _ = _reconciliation_state(sale.internal_id, confirmations)
             economics = None
-            if sale.currency == "USD":
+            if sale.currency == "USD" and item.acquisition_cost is not None:
                 components = costs_by_sale.get(sale.internal_id, [])
                 economics = calculate_sale_economics(
                     gross=sale.gross_amount,

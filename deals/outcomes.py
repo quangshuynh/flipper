@@ -142,7 +142,7 @@ def build_decision_outcome(
     sale = sale_rows[0] if sale_rows else None
     acquisition_actual = (
         inventory.acquisition_cost + (travel.recorded_expense if travel else Decimal(0))
-        if landed_currency == "USD"
+        if landed_currency == "USD" and inventory.acquisition_cost is not None
         else None
     )
     resale_actual = (
@@ -154,8 +154,12 @@ def build_decision_outcome(
         else None
     )
     roi_actual = None
-    actual_basis = inventory.acquisition_cost + (travel.recorded_expense if travel else Decimal(0))
-    if sale and sale.economics and actual_basis != 0:
+    actual_basis = (
+        inventory.acquisition_cost + (travel.recorded_expense if travel else Decimal(0))
+        if inventory.acquisition_cost is not None
+        else None
+    )
+    if sale and sale.economics and actual_basis not in (None, Decimal(0)):
         roi_actual = sale.economics.recorded_profit / actual_basis
     range_position = None
     if sale and held is not None and minimum_days is not None and maximum_days is not None:

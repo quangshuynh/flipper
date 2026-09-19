@@ -483,7 +483,7 @@ def test_web_sync_updates_local_state_idempotently_and_redirects(monkeypatch, tm
     assert "already" in second.headers["location"]
 
 
-def test_web_import_requires_actual_facts_and_is_idempotent(monkeypatch, tmp_path):
+def test_web_import_allows_unknown_acquisition_and_is_idempotent(monkeypatch, tmp_path):
     client, store = _client(monkeypatch, tmp_path)
     listing = EbayActiveListing(
         "item-7", "Q0007", "Imported", "Active", Money(Decimal("75"), "USD"), 1
@@ -501,23 +501,22 @@ def test_web_import_requires_actual_facts_and_is_idempotent(monkeypatch, tmp_pat
         },
         follow_redirects=False,
     )
-    payload = {
-        "item_id": "item-7",
-        "sku": "Q0007",
-        "source": "estate sale",
-        "acquired_at": "2026-08-02",
-        "acquisition_cost": "12.34",
-    }
-    first = client.post("/ebay/listings/import", data=payload, follow_redirects=False)
-    second = client.post("/ebay/listings/import", data=payload, follow_redirects=False)
+    first = missing
+    second = client.post(
+        "/ebay/listings/import",
+        data={"item_id": "item-7", "sku": "Q0007"},
+        follow_redirects=False,
+    )
 
     assert missing.status_code == first.status_code == second.status_code == 303
-    assert "Required" in missing.headers["location"]
     record = store.get("Q0007")
-    assert record.acquisition_cost == Decimal("12.34")
-    assert record.acquired_at == "2026-08-02"
-    assert record.source == "estate sale"
+    assert record.acquisition_cost is None
+    assert record.acquisition_cost_cents is None
+    assert record.acquired_at is None
+    assert record.source is None
     assert record.status == "listed"
+    assert record.marketplace_item_id == "item-7"
+    assert record.marketplace_sku == "Q0007"
     assert len(store.list()) == 1
     assert (
         store.add(
@@ -525,6 +524,48 @@ def test_web_import_requires_actual_facts_and_is_idempotent(monkeypatch, tmp_pat
         ).inventory_id
         == "Q0008"
     )
+    detail = client.get("/inventory/Q0007")
+    assert detail.status_code == 200
+    assert detail.text.count("Unknown") >= 3
+    assert "USD 75.00" not in detail.text
+
+
+def test_inventory_notes_can_be_edited_cleared_and_reject_cross_origin(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    original = store.add(
+        title="Recorder",
+        source="estate",
+        acquired_at="2026-09-01",
+        acquisition_cost="12.34",
+        notes="old note",
+    )
+    rejected = client.post(
+        f"/inventory/{original.inventory_id}/notes",
+        data={"notes": "attacker"},
+        headers={"origin": "https://attacker.example"},
+    )
+    edited = client.post(
+        f"/inventory/{original.inventory_id}/notes",
+        data={"notes": "new note"},
+        follow_redirects=False,
+    )
+    after_edit = store.get(original.inventory_id)
+    cleared = client.post(
+        f"/inventory/{original.inventory_id}/notes",
+        data={"notes": ""},
+        follow_redirects=False,
+    )
+    after_clear = store.get(original.inventory_id)
+
+    assert rejected.status_code == 403
+    assert edited.status_code == cleared.status_code == 303
+    assert after_edit.notes == "new note"
+    assert after_clear.notes == ""
+    assert after_edit.title == after_clear.title == original.title
+    assert after_edit.source == after_clear.source == original.source
+    assert after_edit.acquired_at == after_clear.acquired_at == original.acquired_at
+    assert after_edit.acquisition_cost_cents == after_clear.acquisition_cost_cents == 1234
+    assert after_edit.status == after_clear.status == original.status
 
 
 def test_ebay_errors_are_sanitized_and_dashboard_never_fetches(monkeypatch, tmp_path):

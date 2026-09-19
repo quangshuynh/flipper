@@ -99,3 +99,32 @@ def test_adopt_high_q_advances_allocator_and_reimport_conflicts(tmp_path):
             marketplace_item_id="123",
             marketplace_sku="Q0007",
         )
+
+
+def test_adopt_listing_preserves_unknown_and_known_zero_acquisition(tmp_path):
+    store = InventoryStore(tmp_path / "i.db")
+    unknown, _ = store.adopt_ebay_listing(
+        "Q0002",
+        title="Unknown history",
+        source=None,
+        acquired_at=None,
+        acquisition_cost=None,
+        marketplace_item_id="item-2",
+        marketplace_sku="Q0002",
+    )
+    free, _ = store.adopt_ebay_listing(
+        "Q0003",
+        title="Known free",
+        source="gift",
+        acquired_at="2026-09-01",
+        acquisition_cost="0.00",
+        marketplace_item_id="item-3",
+        marketplace_sku="Q0003",
+    )
+    assert unknown.acquisition_cost is None
+    assert unknown.source is None and unknown.acquired_at is None
+    assert free.acquisition_cost == Decimal(0)
+    assert free.acquisition_cost_cents == 0
+    noted = store.update("Q0002", notes="history unavailable")
+    assert noted.notes == "history unavailable"
+    assert (noted.source, noted.acquired_at, noted.acquisition_cost) == (None, None, None)

@@ -62,11 +62,11 @@ def import_listing(
     *,
     item_id: str,
     sku: str,
-    source: str,
-    acquired_at: str,
-    acquisition_cost: str | Decimal,
+    source: str | None,
+    acquired_at: str | None,
+    acquisition_cost: str | Decimal | None,
 ) -> tuple[InventoryRecord, bool]:
-    """Adopt one uniquely identified missing-local listing using actual acquisition facts."""
+    """Adopt one missing-local listing without inventing unknown acquisition facts."""
     matches = [
         result
         for result in results
