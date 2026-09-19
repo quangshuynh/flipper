@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block actions %}<a href="/ebay/orders">Review eBay sales</a>{% endblock %}
 {% block content %}
 {% if message %}<p class="notice" role="status">{{ message }}</p>{% endif %}
 {% if error_message %}<p class="notice error" role="alert">{{ error_message }}</p>{% endif %}

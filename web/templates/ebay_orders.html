@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block actions %}<a href="/ebay/listings">Active listings</a>{% endblock %}
+{% block content %}
+{% if message %}<p class="notice" role="status">{{ message }}</p>{% endif %}
+{% if error_message %}<p class="notice error" role="alert">{{ error_message }}</p>{% endif %}
+{% if error %}
+<section class="panel"><h2>Orders unavailable</h2><p>{{ error }}</p><p>No local inventory or accounting records were changed.</p></section>
+{% else %}
+<section class="panel">
+  <h2>Recent marketplace observations</h2>
+  <p>Flipper fetched the last 30 days of eBay orders using read-only access. These rows are not local sales until you explicitly import one.</p>
+  <p class="muted">Line-item cost is gross item revenue, not net proceeds. Order total may include buyer-paid shipping and marketplace-collected tax. Fees, seller shipping expense, refunds, and adjustments remain unknown until separately recorded or imported.</p>
+</section>
+<section class="panel table-wrap"><table><thead><tr><th>Order line</th><th>eBay state</th><th>Gross item amount</th><th>Order total</th><th>SKU match</th><th>Local action</th></tr></thead><tbody>
+{% for row in rows %}{% set order = row.order %}{% set match = row.match %}{% set line = match.line_item %}<tr>
+  <td><strong>{{ line.title }}</strong><small>{{ order.creation_date.date().isoformat() }} · Qty {{ line.quantity }}</small></td>
+  <td>{{ order.payment_status or 'Unknown payment' }}<small>{{ order.fulfillment_status or 'Unknown fulfillment' }}{% if order.cancellation_status %} · {{ order.cancellation_status }}{% endif %}</small></td>
+  <td>{% if line.line_item_cost %}{{ line.line_item_cost.value|money(line.line_item_cost.currency) }}{% else %}Unknown{% endif %}</td>
+  <td>{% if order.pricing.total %}{{ order.pricing.total.value|money(order.pricing.total.currency) }}{% else %}Unknown{% endif %}<small>{% if order.pricing.tax %}Includes {{ order.pricing.tax.value|money(order.pricing.tax.currency) }} reported tax{% else %}Tax not reported{% endif %}</small></td>
+  <td><span class="badge {{ match.status.value }}">{{ match.status.value|replace('_', ' ') }}</span><small>SKU: {{ line.sku or 'Missing' }}{% if match.inventory_matches %} · {{ match.inventory_matches[0].inventory_id }}{% endif %}</small></td>
+  <td>{% if match.status.value == 'matched' %}<form method="post" action="/ebay/orders/import"><input type="hidden" name="order_id" value="{{ order.order_id }}"><input type="hidden" name="line_item_id" value="{{ line.line_item_id }}"><button type="submit">Import matched sale</button></form><small>Creates local gross sale and marks the item sold. Accounting starts incomplete.</small>{% else %}Review SKU linkage before importing.{% endif %}</td>
+</tr>{% else %}<tr><td colspan="6">No eBay orders found in the last 30 days.</td></tr>{% endfor %}
+</tbody></table></section>
+{% endif %}
+{% endblock %}
