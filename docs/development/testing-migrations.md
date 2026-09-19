@@ -22,5 +22,16 @@ Schema v12 adds one optional actual sourcing-travel record per inventory item. I
 for existing Q-numbers, preserves unknown separately from zero, stores exact scaled decimals, and
 restricts ownership to an explicit inventory foreign key.
 
+Schema v13 makes historical acquisition source, date, and cost nullable. The inventory-table
+rebuild preserves existing records, identifiers, lifecycle timestamps, marketplace linkage, and
+foreign-key relationships. Missing historical facts remain unknown; an explicit zero acquisition
+cost remains a known zero.
+
+Schema v14 adds nullable sale-revenue component fields for item revenue, buyer-paid shipping,
+marketplace-collected tax, and checkout total. Existing aggregate seller revenue remains
+authoritative, while every newly added component stays unknown until an explicit, compatible eBay
+re-import safely enriches it. The migration never derives components from totals or rewrites a
+historical sale with guessed values.
+
 Tests should assert meaningful structure and behavior rather than decorative CSS values. Networked
 integrations are mocked unless an explicitly authorized, read-only production smoke is being run.
