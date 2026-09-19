@@ -53,8 +53,9 @@ def _ebay_order(*lines, order_id="order-1"):
         cancellation_status="NONE_REQUESTED",
         line_items=tuple(lines),
         pricing=OrderPricingSummary(
-            tax=Money(Decimal("8.07"), "USD"),
-            total=Money(Decimal("83.07"), "USD"),
+            shipping=Money(Decimal("8.07"), "USD"),
+            tax=Money(Decimal("3.98"), "USD"),
+            total=Money(Decimal("87.05"), "USD"),
         ),
     )
 
@@ -135,8 +136,8 @@ def test_ebay_sales_review_discovers_exact_match_without_mutating_local_state(
     assert response.status_code == 200
     assert "Olympus recorder" in response.text
     assert "USD 75.00" in response.text
-    assert "USD 83.07" in response.text
-    assert "Includes USD 8.07 reported tax" in response.text
+    assert "Unknown for this line" in response.text
+    assert "USD 3.98" in response.text
     assert "matched" in response.text
     assert "missing sku" in response.text
     assert "unmatched" in response.text
@@ -174,7 +175,10 @@ def test_explicit_ebay_sale_import_is_idempotent_and_starts_incomplete(monkeypat
     assert "already+imported" in second.headers["location"]
     assert len(store.list_sales()) == 1
     sale = store.list_sales()[0]
-    assert sale.gross_amount == Decimal("75.00")
+    assert sale.item_revenue == Decimal("75.00")
+    assert sale.buyer_shipping == Decimal("8.07")
+    assert sale.gross_amount == Decimal("83.07")
+    assert sale.marketplace_tax == Decimal("3.98")
     assert store.get("Q0001").status == "sold"
     assert store.list_sale_costs(sale.sale_id) == []
     assert store.reconciliation_status(sale.sale_id)[0] == "incomplete"

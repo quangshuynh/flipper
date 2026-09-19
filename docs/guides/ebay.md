@@ -41,18 +41,27 @@ Custom Label/Q-number of one eBay-linked local inventory record. Missing, unmatc
 SKUs remain visible and cannot be imported from the review. Q-number matching is case-sensitive.
 
 The user must select **Import matched sale**. Explicit sale import accepts only deterministic,
-one-to-one matches whose local and external quantities are both one, whose gross line-item money is
-present, and whose local item is acquired or listed. It then atomically creates the authoritative
+one-to-one matches whose local and external quantities are both one, whose item money and
+attributable buyer-paid shipping are present, and whose local item is acquired or listed. It then
+atomically creates the authoritative
 local Sale and marks the item sold. An acquired item keeps `listed_at` unknown rather than inventing
 a listing timestamp. Stable marketplace + order + line-item identity makes exact repeats no-ops and
 turns changed immutable facts into conflicts. Opening or refreshing the review never changes local
 inventory or accounting.
 
-The imported gross is eBay's line-item cost, not the order total or net payout. The order total may
-include buyer-paid shipping and marketplace-collected tax; neither is imported as sale proceeds or
-seller expense. Fees, seller-paid label/shipping expense, refunds, credits, and other adjustments
-remain unknown until separately imported from Finances where supported or entered and confirmed by
-the user. Order responses and buyer data are not persisted.
+Fulfillment `lineItems[].lineItemCost` supplies item revenue. `pricingSummary.deliveryCost` supplies
+buyer-paid shipping at order level, while `pricingSummary.tax` is marketplace-collected tax and
+`pricingSummary.total` is customer checkout context. Flipper imports item plus buyer-paid shipping
+as seller revenue only when shipping attribution is exact: a single-line order, or an explicitly
+zero-shipping multi-line order. It does not allocate nonzero order shipping across lines. Tax never
+enters revenue, profit, expense, or adjustments. Delivery discounts and line promotions remain
+transient order context; no amount is inferred by subtracting totals.
+
+The Fulfillment response is not Flipper's source for marketplace fees. Fees remain unknown until
+entered manually with `sales add-cost --category marketplace_fee` or imported from the existing
+read-only Finances workflow. Seller-paid label/shipping expense is independent of buyer-paid
+shipping and likewise remains unknown until separately imported or entered. Order responses and
+buyer data are not persisted.
 
 Finances reconciliation uses stable order and line identifiers, never amount/title/buyer/date
 guessing. Supported fee, refund, shipping-label, and related adjustment imports are idempotent;

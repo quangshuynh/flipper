@@ -313,6 +313,7 @@ def test_v1_database_migrates_without_changing_existing_record(tmp_path):
             (11,),
             (12,),
             (13,),
+            (14,),
         ]
 
 
@@ -380,7 +381,7 @@ def test_v2_migration_rejects_duplicates_without_modifying_data(tmp_path):
         assert connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone() == (2,)
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (10,), (11,), (12,), (13,)]
+        ).fetchall() == [(1,), (2,), (10,), (11,), (12,), (13,), (14,)]
 
 
 def test_v13_migration_preserves_records_and_allows_unknown_acquisition(tmp_path):

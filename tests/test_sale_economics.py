@@ -140,6 +140,7 @@ def test_v4_migration_preserves_sale_and_starts_with_zero_components(tmp_path):
             (11,),
             (12,),
             (13,),
+            (14,),
         ]
 
 
@@ -219,7 +220,7 @@ def test_cli_add_show_and_remove_cost(tmp_path, capsys):
     capsys.readouterr()
     assert main.main([*base, "show", "S000001"]) == 0
     shown = capsys.readouterr().out
-    assert "Gross sale: USD 72.00" in shown
+    assert "Seller revenue: USD 72.00" in shown
     assert "Acquisition cost: -USD 15.00" in shown
     assert "Marketplace fees: -USD 10.44" in shown
     assert "Shipping: -USD 7.25" in shown

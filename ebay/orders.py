@@ -57,6 +57,7 @@ class EbayOrder:
     cancellation_status: str | None
     line_items: tuple[EbayOrderLineItem, ...]
     pricing: OrderPricingSummary
+    source_line_count: int | None = None
 
 
 def _money(value: Any) -> Money | None:
@@ -155,4 +156,5 @@ def normalize_order(raw: Any) -> EbayOrder:
             discount=_money(summary.get("deliveryDiscount") or summary.get("totalDiscount")),
             total=_money(summary.get("total")),
         ),
+        source_line_count=len(raw_items),
     )

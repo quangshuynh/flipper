@@ -46,7 +46,7 @@ def order(*lines, order_id="order-1"):
         "PAID",
         None,
         tuple(lines),
-        OrderPricingSummary(),
+        OrderPricingSummary(shipping=Money(Decimal("0"), "USD")),
     )
 
 
@@ -298,10 +298,129 @@ def test_v3_database_migrates_to_sales_schema(tmp_path):
             (11,),
             (12,),
             (13,),
+            (14,),
         ]
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sales'"
         ).fetchone() == ("sales",)
+
+
+def test_s000001_shipping_revenue_tax_and_fee_semantics(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    inventory(store)
+    ebay_order = EbayOrder(
+        **{
+            **order(line(amount="75.00")).__dict__,
+            "pricing": OrderPricingSummary(
+                subtotal=Money(Decimal("75.00"), "USD"),
+                shipping=Money(Decimal("8.07"), "USD"),
+                tax=Money(Decimal("3.98"), "USD"),
+                total=Money(Decimal("87.05"), "USD"),
+            ),
+        }
+    )
+    first = import_ebay_sales([ebay_order], store)[0]
+    repeated = import_ebay_sales([ebay_order], store)[0]
+    assert first.status is SaleImportStatus.IMPORTED
+    assert repeated.status is SaleImportStatus.ALREADY_IMPORTED
+    assert first.sale is not None
+    assert first.sale.item_revenue == Decimal("75")
+    assert first.sale.buyer_shipping == Decimal("8.07")
+    assert first.sale.gross_amount == Decimal("83.07")
+    assert first.sale.marketplace_tax == Decimal("3.98")
+    assert first.sale.checkout_total == Decimal("87.05")
+    assert store.reconciliation_status(first.sale.sale_id)[0] == "incomplete"
+    fee = store.add_sale_cost(
+        first.sale.sale_id, category="marketplace_fee", amount=Decimal("12.24")
+    )
+    assert first.sale.gross_amount - fee.amount == Decimal("70.83")
+    from reports.service import sales_report
+
+    row = sales_report(store.list(), store.list_sales(), store.list_all_sale_costs(), {}).rows[0]
+    assert row.economics is not None
+    assert row.economics.recorded_profit == Decimal("60.83")
+    assert row.reconciliation_state == "incomplete"
+    assert "shipping" in row.missing_categories
+
+
+def test_explicit_reimport_enriches_matching_legacy_item_only_sale(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    inventory(store)
+    legacy, _ = store.import_sale(
+        inventory_id="Q0001",
+        marketplace="eBay",
+        external_order_id="order-1",
+        external_line_item_id="line-1",
+        marketplace_sku="Q0001",
+        quantity=1,
+        gross_amount=Decimal("75"),
+        currency="USD",
+        sold_at=SOLD_AT,
+    )
+    ebay_order = EbayOrder(
+        **{
+            **order(line(amount="75")).__dict__,
+            "pricing": OrderPricingSummary(
+                shipping=Money(Decimal("8.07"), "USD"),
+                tax=Money(Decimal("3.98"), "USD"),
+                total=Money(Decimal("87.05"), "USD"),
+            ),
+        }
+    )
+
+    enriched = import_ebay_sales([ebay_order], store)[0]
+    repeated = import_ebay_sales([ebay_order], store)[0]
+
+    assert enriched.status is SaleImportStatus.IMPORTED
+    assert enriched.sale is not None
+    assert enriched.sale.sale_id == legacy.sale_id
+    assert enriched.sale.gross_amount == Decimal("83.07")
+    assert enriched.sale.buyer_shipping == Decimal("8.07")
+    assert repeated.status is SaleImportStatus.ALREADY_IMPORTED
+
+
+def test_unknown_buyer_shipping_is_not_treated_as_known_zero(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    inventory(store)
+    unknown = EbayOrder(**{**order(line()).__dict__, "pricing": OrderPricingSummary(shipping=None)})
+    result = import_ebay_sales([unknown], store)[0]
+    assert result.status is SaleImportStatus.MISSING_SELLER_REVENUE
+    assert store.list_sales() == []
+
+
+def test_v13_sale_migrates_with_revenue_components_unknown(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    inventory(store)
+    sale, _ = store.import_sale(
+        inventory_id="Q0001",
+        marketplace="eBay",
+        external_order_id="legacy-order",
+        external_line_item_id="legacy-line",
+        marketplace_sku="Q0001",
+        quantity=1,
+        gross_amount=Decimal("75"),
+        currency="USD",
+        sold_at=SOLD_AT,
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 14")
+        for name in (
+            "item_revenue_minor",
+            "item_revenue_scale",
+            "buyer_shipping_minor",
+            "buyer_shipping_scale",
+            "marketplace_tax_minor",
+            "marketplace_tax_scale",
+            "checkout_total_minor",
+            "checkout_total_scale",
+        ):
+            connection.execute(f"ALTER TABLE sales DROP COLUMN {name}")
+    store.initialize()
+    migrated = store.get_sale(sale.sale_id)
+    assert migrated.gross_amount == Decimal("75")
+    assert migrated.item_revenue is None
+    assert migrated.buyer_shipping is None
+    assert migrated.marketplace_tax is None
 
 
 def test_amount_precision_and_quantity_validation_are_safe(tmp_path):
