@@ -4,8 +4,7 @@
   <span>Deal Score</span>
   {% if score.available %}
   <strong>{{ score.value }} / 10</strong>
-  <span>{{ score.label }}</span>
-  <small>Confidence: {{ score.confidence }}</small>
+  <small>{{ score.label }} · {{ score.confidence }} confidence</small>
   {% else %}
   <strong>Unavailable</strong>
   <small>{{ score.unavailable_reason }}</small>

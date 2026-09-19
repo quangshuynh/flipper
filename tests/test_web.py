@@ -975,7 +975,10 @@ def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_pa
     assert "Needs resale estimate" in results.text
     assert 'aria-label="Deal Score"' in results.text
     assert "Deal Score" in results.text and "Unavailable" in results.text
-    assert "sold comparable evidence in the asking-price currency is unavailable" in results.text
+    assert "Needs evaluation" in results.text
+    assert (
+        "sold comparable evidence in the asking-price currency is unavailable" not in results.text
+    )
     assert "5.0 / 10" not in results.text
     assert 'href="/deals/ebay/v1|123|0">Evaluate deal</a>' in results.text
     assert 'class="active" href="/deals"' in results.text
@@ -983,6 +986,7 @@ def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_pa
     assert "USD 20.00" in analyzed.text
     assert "USD 2.86" in analyzed.text and "USD 5.00/day" in analyzed.text
     assert "sold comparables" in analyzed.text
+    assert "sold comparable evidence in the asking-price currency is unavailable" in analyzed.text
 
 
 def test_deal_acquisition_requires_actual_facts_and_uses_q_number(monkeypatch, tmp_path):
@@ -1468,7 +1472,7 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
     cards = client.get("/deals")
     assert cards.status_code == 200
     assert "From latest saved evaluation" in cards.text
-    assert "Confidence: Low" in cards.text
+    assert "Low confidence" in cards.text
     assert "Promising" in cards.text or "Exceptional potential" in cards.text
     assert 'aria-label="Deal Score"' in cards.text
     assert f'href="{path}">Evaluate deal</a>' in cards.text
