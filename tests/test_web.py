@@ -18,7 +18,16 @@ def _client(monkeypatch, tmp_path):
     return TestClient(app), InventoryStore(database)
 
 
-def _sold(store, number, *, gross="100.00", currency="USD"):
+def _sold(
+    store,
+    number,
+    *,
+    gross="100.00",
+    currency="USD",
+    item_revenue=None,
+    buyer_shipping=None,
+    marketplace_tax=None,
+):
     item = store.add(
         title=f"Laptop {number}",
         source="test source",
@@ -39,6 +48,9 @@ def _sold(store, number, *, gross="100.00", currency="USD"):
         gross_amount=Decimal(gross),
         currency=currency,
         sold_at=datetime(2026, 9, number, 12, tzinfo=timezone.utc),
+        item_revenue=Decimal(item_revenue) if item_revenue is not None else None,
+        buyer_shipping=Decimal(buyer_shipping) if buyer_shipping is not None else None,
+        marketplace_tax=Decimal(marketplace_tax) if marketplace_tax is not None else None,
     )
     return item, sale
 
@@ -426,6 +438,101 @@ def test_sales_states_components_missing_categories_and_analytics(monkeypatch, t
     assert "USD 150.00" in analytics.text
 
 
+def test_sale_detail_accounting_editor_preserves_component_semantics(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    item, sale = _sold(
+        store,
+        1,
+        gross="83.07",
+        item_revenue="75",
+        buyer_shipping="8.07",
+        marketplace_tax="3.98",
+    )
+
+    detail = client.get(f"/sales/{sale.sale_id}")
+    assert '<span class="value-primary">USD 3.98</span>' in detail.text
+    assert (
+        '<small class="value-note">Excluded from seller revenue and profit</small>' in detail.text
+    )
+    assert "USD 3.98Excluded" not in detail.text
+    assert '<span class="value-primary">−USD 0.00</span>' in detail.text
+    assert '<small class="value-note">Missing categories remain unknown</small>' in detail.text
+    assert "USD 0.00Missing categories" not in detail.text
+    assert "Complete reconciliation" in detail.text
+
+    editor = client.get(f"/sales/{sale.sale_id}?edit_accounting=true")
+    assert editor.status_code == 200
+    assert "Marketplace fees" in editor.text
+    assert "Seller-paid shipping expense" in editor.text
+    assert "Buyer-paid shipping is revenue" in editor.text
+    assert 'value="marketplace_tax"' not in editor.text
+    assert 'value="buyer_shipping"' not in editor.text
+
+    rejected = client.post(
+        f"/sales/{sale.sale_id}/accounting",
+        data={"category": "fees", "action": "record", "amount": "12.24"},
+        headers={"Origin": "https://attacker.example"},
+    )
+    assert rejected.status_code == 403
+    assert store.list_sale_costs(sale.sale_id) == []
+
+    fee = client.post(
+        f"/sales/{sale.sale_id}/accounting",
+        data={"category": "fees", "action": "record", "amount": "12.24"},
+        follow_redirects=False,
+    )
+    shipping = client.post(
+        f"/sales/{sale.sale_id}/accounting",
+        data={"category": "shipping", "action": "record", "amount": "5.00"},
+        follow_redirects=False,
+    )
+    assert store.reconciliation_status(sale.sale_id) == (
+        "partially_reconciled",
+        ("refunds", "adjustments"),
+    )
+    refunds = client.post(
+        f"/sales/{sale.sale_id}/accounting",
+        data={"category": "refunds", "action": "confirm_zero"},
+        follow_redirects=False,
+    )
+    assert fee.status_code == shipping.status_code == refunds.status_code == 303
+    costs = store.list_sale_costs(sale.sale_id)
+    assert [(cost.category, cost.amount) for cost in costs] == [
+        ("marketplace_fee", Decimal("12.24")),
+        ("shipping_cost", Decimal("5")),
+    ]
+    assert "Confirm reviewed" in client.get(f"/sales/{sale.sale_id}?edit_accounting=true").text
+    assert store.reconciliation_status(sale.sale_id) == (
+        "partially_reconciled",
+        ("adjustments",),
+    )
+    partial = client.get(f"/sales/{sale.sale_id}")
+    assert "Recorded profit (provisional)" in partial.text
+    assert "Final realized profit, margin, and ROI are unavailable" in partial.text
+    assert "USD 40.83" in partial.text
+
+    invalid_tax = client.post(
+        f"/sales/{sale.sale_id}/accounting",
+        data={"category": "marketplace_tax", "action": "record", "amount": "3.98"},
+        follow_redirects=False,
+    )
+    assert "error_message=" in invalid_tax.headers["location"]
+    assert len(store.list_sale_costs(sale.sale_id)) == 2
+
+    adjustments = client.post(
+        f"/sales/{sale.sale_id}/accounting",
+        data={"category": "adjustments", "action": "confirm_zero"},
+        follow_redirects=False,
+    )
+    assert adjustments.status_code == 303
+    assert store.reconciliation_status(sale.sale_id) == ("fully_reconciled", ())
+    complete = client.get(adjustments.headers["location"])
+    assert "Realized profit" in complete.text
+    assert "Recorded profit (provisional)" not in complete.text
+    assert "Final realized profit, margin, and ROI are unavailable" not in complete.text
+    assert "USD 40.83" in complete.text
+
+
 def test_zero_cost_incomplete_sale_is_visibly_provisional_without_changing_math(
     monkeypatch, tmp_path
 ):
@@ -749,6 +856,16 @@ def test_inventory_notes_can_be_edited_cleared_and_reject_cross_origin(monkeypat
         acquisition_cost="12.34",
         notes="old note",
     )
+    read = client.get(f"/inventory/{original.inventory_id}")
+    edit = client.get(f"/inventory/{original.inventory_id}?edit_notes=true")
+    assert "old note" in read.text
+    assert 'name="notes"' not in read.text
+    assert ">Edit</a>" in read.text
+    assert '<textarea name="notes"' in edit.text
+    assert "old note</textarea>" in edit.text
+    assert f'href="/inventory/{original.inventory_id}">Cancel</a>' in edit.text
+    assert store.get(original.inventory_id).notes == "old note"
+
     rejected = client.post(
         f"/inventory/{original.inventory_id}/notes",
         data={"notes": "attacker"},
@@ -776,6 +893,10 @@ def test_inventory_notes_can_be_edited_cleared_and_reject_cross_origin(monkeypat
     assert after_edit.acquired_at == after_clear.acquired_at == original.acquired_at
     assert after_edit.acquisition_cost_cents == after_clear.acquisition_cost_cents == 1234
     assert after_edit.status == after_clear.status == original.status
+    cleared_detail = client.get(f"/inventory/{original.inventory_id}")
+    assert "No notes" in cleared_detail.text
+    assert ">Add note</a>" in cleared_detail.text
+    assert 'name="notes"' not in cleared_detail.text
 
 
 def test_ebay_errors_are_sanitized_and_dashboard_never_fetches(monkeypatch, tmp_path):
