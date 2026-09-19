@@ -1447,6 +1447,12 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
     assert len(store.list_research_snapshots()) == 1
     assert detail.status_code == history.status_code == 200
     assert "Saved research snapshot" in detail.text
+    assert "Deal Score at decision time" in detail.text
+    assert "deal-score-v1" not in detail.text
+    frozen_score = store.list_research_snapshots()[0]
+    frozen_payload = store.get_research_snapshot(frozen_score.snapshot_id).payload
+    assert frozen_payload["derived"]["deal_score"]["version"] == "deal-score-v1"
+    assert frozen_payload["derived"]["deal_score"]["value"] is not None
     assert "Decision vs. Outcome" in detail.text
     assert "No actual outcome is available" in detail.text
     assert "Asking price at snapshot" in detail.text and "USD 20.25" in detail.text
@@ -1495,6 +1501,10 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
     assert "final realized profit and ROI are unavailable" in realized.text
     assert "Unavailable" in realized.text
     assert f'href="/sales/{sale.sale_id}"' in realized.text
+    assert (
+        store.get_research_snapshot(frozen_score.snapshot_id).payload["derived"]["deal_score"]
+        == frozen_payload["derived"]["deal_score"]
+    )
 
     for category in ("fees", "shipping", "refunds", "adjustments"):
         store.set_reconciliation_confirmation(sale.sale_id, category, confirmed=True)

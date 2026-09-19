@@ -46,6 +46,7 @@ from deals.models import (
 )
 from deals.research import EphemeralResearchStore
 from deals.snapshots import SnapshotPayloadError, build_snapshot_payload
+from deals.scoring import calculate_deal_score
 from deals.travel import TripEstimate, trip_from_values
 from ebay.compliance import app
 from ebay.discovery import DiscoveryConfig, EbayDiscoveryClient, EbayDiscoveryError
@@ -383,6 +384,12 @@ def _render_deal_detail(
     status_code=200,
 ):
     evidence = research_store.evidence_set(_research_session(request), key, as_of=_today())
+    deal_score = calculate_deal_score(
+        asking_price=opportunity.base_price,
+        economics=evaluation.economics,
+        evidence=evidence,
+        condition_known=bool(opportunity.condition),
+    )
     return _render(
         request,
         "deal_detail.html",
@@ -404,6 +411,7 @@ def _render_deal_detail(
         trip_relevant=trip_relevant,
         research_rows=research_store.list(_research_session(request), key),
         evidence=evidence,
+        deal_score=deal_score,
         comparable_types=ComparableType,
         comparable_conditions=ComparableCondition,
         source_identities=SourceIdentity,
@@ -1090,6 +1098,12 @@ def deal_compare(request: Request):
                     "evaluation": evaluation,
                     "trip": trip,
                     "evidence": evidence,
+                    "deal_score": calculate_deal_score(
+                        asking_price=opportunity.base_price,
+                        economics=evaluation.economics,
+                        evidence=evidence,
+                        condition_known=bool(opportunity.condition),
+                    ),
                     "sold_summaries": evidence.summaries(ComparableType.SOLD),
                     "active_summaries": evidence.summaries(ComparableType.ACTIVE_ASKING),
                     "values": values,
@@ -1200,6 +1214,12 @@ async def _save_snapshot(request: Request, opportunity_key: str):
             evaluation=evaluation,
             trip=trip,
             evidence=evidence,
+            deal_score=calculate_deal_score(
+                asking_price=opportunity.base_price,
+                economics=evaluation.economics,
+                evidence=evidence,
+                condition_known=bool(opportunity.condition),
+            ),
         )
         snapshot = _store().save_research_snapshot(
             opportunity_identity=opportunity_key,

@@ -46,6 +46,7 @@ def build_snapshot_payload(
     evaluation,
     trip,
     evidence: ComparableEvidenceSet,
+    deal_score=None,
 ) -> dict[str, Any]:
     """Copy the evaluated aggregate; no live object is retained or consulted on read."""
     comparable_rows = []
@@ -130,8 +131,13 @@ def build_snapshot_payload(
                 else None,
                 "notes": list(evaluation.confidence.notes),
             },
+            "deal_score": None,
         },
     }
+    if deal_score is not None:
+        from deals.scoring import deal_score_to_payload
+
+        payload["derived"]["deal_score"] = deal_score_to_payload(deal_score)
     if economics.profit_velocity:
         velocity = economics.profit_velocity
         payload["derived"]["profit_velocity"] = {
