@@ -76,12 +76,17 @@ def test_snapshot_payload_is_a_copy_and_inventory_link_is_optional(tmp_path):
         acquisition_cost="9.00",
     )
     linked = store.link_research_snapshot(record.snapshot_id, item.inventory_id)
+    unlinked = save(store, token="f" * 32, title="Other camera")
 
     assert (
         store.get_research_snapshot(record.snapshot_id).payload["opportunity"]["title"] == "Camera"
     )
     assert linked.inventory_id == item.inventory_id
     assert store.get(item.inventory_id).acquisition_cost == Decimal("9.00")
+    assert [row.snapshot_id for row in store.list_research_snapshots(item.inventory_id)] == [
+        linked.snapshot_id
+    ]
+    assert unlinked.snapshot_id in {row.snapshot_id for row in store.list_research_snapshots()}
 
 
 def test_malformed_identifier_payload_and_database_failure_are_safe(tmp_path):

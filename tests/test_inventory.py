@@ -55,6 +55,31 @@ def test_current_schema_reopens_without_changing_data_or_migration_metadata(tmp_
     assert after == before
 
 
+def test_store_operations_reuse_successful_instance_schema_check(monkeypatch, tmp_path):
+    statements = []
+    original_connect = InventoryStore._connect
+
+    def traced_connect(self):
+        connection = original_connect(self)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(InventoryStore, "_connect", traced_connect)
+    store = InventoryStore(tmp_path / "inventory.db", reuse_schema_check=True)
+    assert store.list() == []
+
+    statements.clear()
+    assert store.list() == []
+    assert store.list_sales() == []
+    selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 2
+    assert all("schema_migrations" not in sql for sql in selects)
+
+    statements.clear()
+    store.initialize()
+    assert any("schema_migrations" in sql for sql in statements)
+
+
 def test_ids_increment_and_deleted_ids_are_not_reused(tmp_path):
     store = InventoryStore(tmp_path / "inventory.db")
     assert store.add(**values()).inventory_id == "Q0001"

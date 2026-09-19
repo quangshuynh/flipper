@@ -321,9 +321,11 @@ def parse_usd_cents(value: str | Decimal) -> int:
 class InventoryStore:
     """Own the local inventory database and its schema migrations."""
 
-    def __init__(self, path: str | Path, *, clock=None) -> None:
+    def __init__(self, path: str | Path, *, clock=None, reuse_schema_check: bool = False) -> None:
         self.path = Path(path)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._reuse_schema_check = reuse_schema_check
+        self._initialized = False
 
     def _utc_now(self) -> str:
         value = self._clock()
@@ -867,11 +869,17 @@ class InventoryStore:
             if foreign_key_violation is not None:
                 raise RuntimeError("inventory migration failed foreign-key integrity validation")
             connection.commit()
+            self._initialized = True
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
+
+    def _ensure_initialized(self) -> None:
+        """Initialize once per store instance while keeping explicit checks repeatable."""
+        if not self._reuse_schema_check or not self._initialized:
+            self.initialize()
 
     @staticmethod
     def _required(value: str, name: str) -> str:
@@ -969,7 +977,7 @@ class InventoryStore:
             marketplace_item_id=marketplace_item_id,
             marketplace_sku=marketplace_sku,
         )
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1013,7 +1021,7 @@ class InventoryStore:
             marketplace_sku=marketplace_sku,
             allow_unknown_acquisition=True,
         )
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1061,7 +1069,7 @@ class InventoryStore:
         self, inventory_id: str, *, marketplace_item_id: str, marketplace_sku: str
     ) -> tuple[InventoryRecord, bool]:
         """Atomically fill identical-safe linkage and acquire-to-listed transition."""
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1173,7 +1181,7 @@ class InventoryStore:
             deal_score=deal_score,
             pricing_method=pricing_method,
         )
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1215,7 +1223,7 @@ class InventoryStore:
             raise InventoryValidationError("acquired-at must use YYYY-MM-DD")
         if acquisition_cost is not _UNSET and acquisition_cost in (None, ""):
             raise InventoryValidationError("acquisition cost must be a valid USD amount")
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1277,7 +1285,7 @@ class InventoryStore:
         """Apply one valid lifecycle transition and its UTC timestamps atomically."""
         if status not in VALID_STATUSES:
             raise InventoryValidationError(f"status must be one of: {', '.join(VALID_STATUSES)}")
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1395,7 +1403,7 @@ class InventoryStore:
         imported_timestamp = self._utc_now()
         identity = (marketplace, external_order_id, external_line_item_id)
 
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1586,7 +1594,7 @@ class InventoryStore:
         return self.get_sale(sale_id), True
 
     def get_sale(self, sale_id: str) -> SaleRecord:
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             row = connection.execute(
                 """SELECT sales.*, inventory_items.inventory_id
@@ -1600,7 +1608,7 @@ class InventoryStore:
         return self._sale_record(row)
 
     def list_sales(self) -> list[SaleRecord]:
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT sales.*, inventory_items.inventory_id
@@ -1638,7 +1646,7 @@ class InventoryStore:
             amount_minor, amount_scale = self._scaled_amount(amount)
         except SaleImportError as exc:
             raise SaleCostValidationError(str(exc).replace("gross item", "cost")) from exc
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1713,7 +1721,7 @@ class InventoryStore:
             amount_minor, amount_scale = self._scaled_amount(amount)
         except SaleImportError as exc:
             raise SaleCostValidationError(str(exc).replace("gross item", "cost")) from exc
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -1879,7 +1887,7 @@ class InventoryStore:
         return status, missing
 
     def get_sale_cost(self, cost_id: str) -> SaleCostRecord:
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             row = connection.execute(
                 """SELECT sale_costs.*, sales.sale_id,
@@ -1910,7 +1918,7 @@ class InventoryStore:
 
     def list_all_sale_costs(self) -> list[SaleCostRecord]:
         """Return all recorded sale components in stable order for bulk reporting."""
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT sale_costs.*, sales.sale_id,
@@ -1924,7 +1932,7 @@ class InventoryStore:
 
     def list_reconciliation_confirmations(self) -> dict[int, frozenset[str]]:
         """Return confirmed categories keyed by internal sale ID for bulk reporting."""
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT sale_internal_id, category
@@ -1938,7 +1946,7 @@ class InventoryStore:
 
     def remove_sale_cost(self, cost_id: str) -> SaleCostRecord:
         """Remove an erroneous component without reusing its stable identifier."""
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -2087,7 +2095,7 @@ class InventoryStore:
             deal_score=deal_score,
             pricing_method=pricing_method,
         )
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -2117,7 +2125,7 @@ class InventoryStore:
         return self.get_valuation_snapshot(snapshot_id)
 
     def get_valuation_snapshot(self, snapshot_id: int) -> ValuationSnapshot:
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             row = connection.execute(
                 """SELECT valuation_snapshots.*, inventory_items.inventory_id
@@ -2131,7 +2139,7 @@ class InventoryStore:
         return self._valuation_record(row)
 
     def list_valuation_snapshots(self, inventory_id: str | None = None) -> list[ValuationSnapshot]:
-        self.initialize()
+        self._ensure_initialized()
         parameters: tuple[object, ...] = ()
         where = ""
         if inventory_id is not None:
@@ -2174,7 +2182,7 @@ class InventoryStore:
             raise AttachmentValidationError("stored filename must be a single safe path component")
         if isinstance(byte_size, bool) or not isinstance(byte_size, int) or byte_size < 0:
             raise AttachmentValidationError("attachment byte size must be a nonnegative integer")
-        self.initialize()
+        self._ensure_initialized()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -2211,7 +2219,7 @@ class InventoryStore:
     def get_attachment(
         self, attachment_id: str, *, inventory_id: str | None = None
     ) -> AttachmentRecord:
-        self.initialize()
+        self._ensure_initialized()
         where = "WHERE inventory_attachments.attachment_id = ?"
         parameters: tuple[object, ...] = (attachment_id,)
         if inventory_id is not None:
@@ -2244,7 +2252,7 @@ class InventoryStore:
 
     def attachment_counts(self) -> dict[int, int]:
         """Return attachment counts for all inventory records in one bounded query."""
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT inventory_internal_id, COUNT(*) AS count "
@@ -2359,7 +2367,7 @@ class InventoryStore:
         )
 
     def get(self, inventory_id: str) -> InventoryRecord:
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT * FROM inventory_items WHERE inventory_id = ?", (inventory_id.upper(),)
@@ -2369,7 +2377,7 @@ class InventoryStore:
         return self._record(row)
 
     def list(self) -> list[InventoryRecord]:
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM inventory_items ORDER BY internal_id"
@@ -2391,7 +2399,7 @@ class InventoryStore:
         save_token: str,
     ) -> ResearchSnapshotRecord:
         """Atomically persist one validated historical copy; retry tokens are idempotent."""
-        self.initialize()
+        self._ensure_initialized()
         if len(save_token) != 32 or any(char not in "0123456789abcdef" for char in save_token):
             raise ResearchSnapshotValidationError("save token is invalid")
         for value, name, limit in (
@@ -2478,7 +2486,7 @@ class InventoryStore:
             connection.close()
 
     def get_research_snapshot(self, snapshot_id: str) -> ResearchSnapshotRecord:
-        self.initialize()
+        self._ensure_initialized()
         if len(snapshot_id) != 32 or any(c not in "0123456789abcdef" for c in snapshot_id):
             raise ResearchSnapshotNotFoundError("research snapshot was not found")
         with self._connect() as connection:
@@ -2493,15 +2501,23 @@ class InventoryStore:
             raise ResearchSnapshotNotFoundError("research snapshot was not found")
         return self._research_snapshot_record(row)
 
-    def list_research_snapshots(self) -> list[ResearchSnapshotRecord]:
-        self.initialize()
+    def list_research_snapshots(
+        self, inventory_id: str | None = None
+    ) -> list[ResearchSnapshotRecord]:
+        self._ensure_initialized()
+        where = ""
+        parameters: tuple[str, ...] = ()
+        if inventory_id is not None:
+            where = "WHERE inventory_items.inventory_id = ? "
+            parameters = (inventory_id.upper(),)
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT research_snapshots.*, inventory_items.inventory_id "
                 "FROM research_snapshots LEFT JOIN inventory_items "
                 "ON inventory_items.internal_id = "
-                "research_snapshots.inventory_internal_id ORDER BY saved_at DESC, "
-                "research_snapshots.internal_id DESC"
+                "research_snapshots.inventory_internal_id "
+                f"{where}ORDER BY saved_at DESC, research_snapshots.internal_id DESC",
+                parameters,
             ).fetchall()
         return [self._research_snapshot_record(row, include_payload=False) for row in rows]
 
@@ -2509,7 +2525,7 @@ class InventoryStore:
         self, opportunity_identities: tuple[str, ...]
     ) -> dict[str, ResearchSnapshotRecord]:
         """Return the newest immutable snapshot for each requested bounded identity."""
-        self.initialize()
+        self._ensure_initialized()
         identities = tuple(dict.fromkeys(opportunity_identities))
         if not identities:
             return {}
@@ -2625,7 +2641,7 @@ class InventoryStore:
         return self._sourcing_travel_record(row) if row else None
 
     def list_sourcing_travel(self) -> list[SourcingTravelRecord]:
-        self.initialize()
+        self._ensure_initialized()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT sourcing_travel.*, inventory_items.inventory_id FROM sourcing_travel "
