@@ -25,8 +25,12 @@ never becomes acquisition cost.
 
 ## Orders and Finances
 
-Flipper retrieves recent seller orders with `GET /sell/fulfillment/v1/order` and the
-`sell.fulfillment.readonly` seller scope. The web **eBay Sales** review fetches a transient 30-day
+Active seller listings and completed seller orders come from different API families. Active-listing
+sync uses Trading API `GetMyeBaySelling` with the base eBay OAuth scope; it does not use Browse or
+Inventory API. Public deal discovery separately uses Buy Browse with an application token and is not
+seller reconciliation. Flipper retrieves recent seller orders with Sell Fulfillment
+`GET /sell/fulfillment/v1/order` and the `sell.fulfillment.readonly` seller scope. Existing seller
+tokens issued before that scope was configured must be reauthorized. The web **eBay Sales** review fetches a transient 30-day
 window when opened; there is no background synchronization. CLI order commands accept explicit date
 ranges up to the API's two-year history window. The order response is independent of the active
 listings feed, so a sold listing disappearing from ActiveList does not prevent reconciliation.
@@ -38,8 +42,9 @@ SKUs remain visible and cannot be imported from the review. Q-number matching is
 
 The user must select **Import matched sale**. Explicit sale import accepts only deterministic,
 one-to-one matches whose local and external quantities are both one, whose gross line-item money is
-present, and whose local item is listed. It then atomically creates the authoritative local Sale and
-marks the item sold. Stable marketplace + order + line-item identity makes exact repeats no-ops and
+present, and whose local item is acquired or listed. It then atomically creates the authoritative
+local Sale and marks the item sold. An acquired item keeps `listed_at` unknown rather than inventing
+a listing timestamp. Stable marketplace + order + line-item identity makes exact repeats no-ops and
 turns changed immutable facts into conflicts. Opening or refreshing the review never changes local
 inventory or accounting.
 

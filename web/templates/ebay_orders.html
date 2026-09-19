@@ -18,7 +18,7 @@
   <td>{% if line.line_item_cost %}{{ line.line_item_cost.value|money(line.line_item_cost.currency) }}{% else %}Unknown{% endif %}</td>
   <td>{% if order.pricing.total %}{{ order.pricing.total.value|money(order.pricing.total.currency) }}{% else %}Unknown{% endif %}<small>{% if order.pricing.tax %}Includes {{ order.pricing.tax.value|money(order.pricing.tax.currency) }} reported tax{% else %}Tax not reported{% endif %}</small></td>
   <td><span class="badge {{ match.status.value }}">{{ match.status.value|replace('_', ' ') }}</span><small>SKU: {{ line.sku or 'Missing' }}{% if match.inventory_matches %} · {{ match.inventory_matches[0].inventory_id }}{% endif %}</small></td>
-  <td>{% if match.status.value == 'matched' %}<form method="post" action="/ebay/orders/import"><input type="hidden" name="order_id" value="{{ order.order_id }}"><input type="hidden" name="line_item_id" value="{{ line.line_item_id }}"><button type="submit">Import matched sale</button></form><small>Creates local gross sale and marks the item sold. Accounting starts incomplete.</small>{% else %}Review SKU linkage before importing.{% endif %}</td>
+  <td>{% if match.status.value == 'matched' %}<form method="post" action="/ebay/orders/import"><input type="hidden" name="order_id" value="{{ order.order_id }}"><input type="hidden" name="line_item_id" value="{{ line.line_item_id }}"><button type="submit">Import matched sale</button></form><small>Creates local gross sale and marks acquired or listed inventory sold. Accounting starts incomplete.</small>{% else %}Review SKU linkage before importing.{% endif %}</td>
 </tr>{% else %}<tr><td colspan="6">No eBay orders found in the last 30 days.</td></tr>{% endfor %}
 </tbody></table></section>
 {% endif %}

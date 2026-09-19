@@ -155,7 +155,7 @@ def test_explicit_ebay_sale_import_is_idempotent_and_starts_incomplete(monkeypat
         marketplace="eBay",
         marketplace_sku="Q0001",
     )
-    store.transition_status(item.inventory_id, "listed")
+    assert item.status == "acquired"
     _mock_live_orders(monkeypatch, [_ebay_order(_order_line())])
     data = {"order_id": "order-1", "line_item_id": "line-1"}
 
