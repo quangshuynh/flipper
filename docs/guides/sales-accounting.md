@@ -6,7 +6,8 @@ time. They exclude buyer PII. Exact re-import is a no-op; changed immutable data
 Sale cost components include marketplace fees, seller-paid shipping, refunds, other reductions,
 and supported credits/reversals. Manual components remain distinct from eBay Finances imports.
 Amounts are exact and must use the sale currency. Acquisition cost is USD, so Flipper withholds a
-profit result for non-USD sales rather than converting currency.
+profit result for non-USD sales rather than converting currency. It also withholds profit and ROI
+when acquisition cost is unknown; missing cost never participates as zero.
 
 Recorded realized profit is derived from gross proceeds, acquisition cost, recorded actual sourcing
 fuel/additional travel expenses, and sale components. Actual sourcing travel is Q-linked acquisition-

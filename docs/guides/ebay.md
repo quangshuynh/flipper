@@ -18,8 +18,10 @@ are not stored.
 Trading API active listings use an exact uppercase Q-number Custom Label/SKU. Read-only comparison
 reports `MATCHED`, `MISSING_LOCAL`, `MISSING_SKU`, `INVALID_SKU`, or `CONFLICT`. Explicit sync may
 fill compatible local linkage and move acquired inventory to listed; it never edits eBay. Missing
-listings do not mutate local inventory. Importing a missing local item requires real acquisition
-source, date, and cost—never the eBay asking price.
+listings do not mutate local inventory. Importing a missing local item accepts acquisition source,
+date, and cost when they are known, but permits genuinely unknown historical facts to remain
+unknown. Blank cost is unknown; explicit `0.00` is a known free acquisition. The eBay asking price
+never becomes acquisition cost.
 
 ## Orders and Finances
 

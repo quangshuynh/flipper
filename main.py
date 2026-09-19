@@ -458,14 +458,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync_listings.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     import_listing = ebay_commands.add_parser(
-        "import-listing", help="adopt one missing-local listing with actual acquisition facts"
+        "import-listing", help="adopt one missing-local listing; unknown history may be omitted"
     )
     import_listing.add_argument("sku")
-    import_listing.add_argument("--source", required=True, help="actual acquisition source")
+    import_listing.add_argument("--source", help="actual acquisition source, if known")
     import_listing.add_argument(
-        "--acquired-at", required=True, help="actual acquisition date (YYYY-MM-DD)"
+        "--acquired-at", help="actual acquisition date (YYYY-MM-DD), if known"
     )
-    import_listing.add_argument("--cost", required=True, help="actual acquisition cost in USD")
+    import_listing.add_argument("--cost", help="actual acquisition cost in USD, if known")
     import_listing.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
     inventory = commands.add_parser("inventory", help="manage local inventory")
     inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
@@ -749,7 +749,7 @@ def run_inventory_command(args: argparse.Namespace) -> int:
             for record in records:
                 print(
                     f"{record.inventory_id} | {record.status} | qty {record.quantity} | "
-                    f"${record.acquisition_cost:.2f} | {record.title}"
+                    f"{_optional_usd(record.acquisition_cost)} | {record.title}"
                 )
             return 0
 
@@ -775,7 +775,7 @@ def run_inventory_command(args: argparse.Namespace) -> int:
             print(f"Updated inventory item {record.inventory_id}")
             print(
                 f"{record.status} | qty {record.quantity} | "
-                f"${record.acquisition_cost:.2f} | {record.title}"
+                f"{_optional_usd(record.acquisition_cost)} | {record.title}"
             )
             return 0
 
@@ -851,9 +851,9 @@ def run_inventory_command(args: argparse.Namespace) -> int:
         record = store.get(args.inventory_id)
         print(f"{record.inventory_id}: {record.title}")
         print("Acquisition")
-        print(f"  Source: {record.source}")
-        print(f"  Date: {record.acquired_at}")
-        print(f"  Cost (USD): ${record.acquisition_cost:.2f}")
+        print(f"  Source: {record.source or 'unknown'}")
+        print(f"  Date: {record.acquired_at or 'unknown'}")
+        print(f"  Cost (USD): {_optional_usd(record.acquisition_cost)}")
         print(f"  Quantity: {record.quantity}")
         print(f"  Status: {record.status}")
         print(f"  Listed at (UTC): {record.listed_at or 'none'}")
@@ -1048,12 +1048,14 @@ def run_sales_command(args: argparse.Namespace) -> int:
         print("Economics (recorded local data)")
         print(f"  Gross sale: {gross}")
         inventory = store.get(sale.inventory_id)
-        if sale.currency != "USD":
+        if sale.currency != "USD" or inventory.acquisition_cost is None:
             print("  Recorded profit: unavailable")
-            print(
-                "  Reason: acquisition cost is stored in USD and currency conversion "
-                "is not supported"
+            reason = (
+                "acquisition cost is unknown"
+                if inventory.acquisition_cost is None
+                else "acquisition cost is stored in USD and currency conversion is not supported"
             )
+            print(f"  Reason: {reason}")
         else:
             economics = calculate_sale_economics(
                 gross=sale.gross_amount,
@@ -1128,6 +1130,10 @@ def _report_money(currency: str, amount: Decimal) -> str:
     return f"{currency} {exact}"
 
 
+def _optional_usd(amount: Decimal | None) -> str:
+    return "unknown" if amount is None else f"${amount:.2f}"
+
+
 def _report_decimal(value: Decimal | None, *, suffix: str = "") -> str:
     return "unavailable" if value is None else f"{value:.2f}{suffix}"
 
@@ -1139,11 +1145,13 @@ def _print_inventory_report(report) -> None:
     for row in report.rows:
         record = row.record
         print(
-            f"{record.inventory_id} | {record.status} | USD {record.acquisition_cost:.2f} | "
+            f"{record.inventory_id} | {record.status} | "
+            f"{_optional_usd(record.acquisition_cost)} | "
             f"marketplace: {record.marketplace or 'none'} | SKU: {record.marketplace_sku or 'none'}"
         )
         print(
-            f"  acquired: {record.acquired_at} | listed: {record.listed_at or 'none'} | "
+            f"  acquired: {record.acquired_at or 'unknown'} | "
+            f"listed: {record.listed_at or 'none'} | "
             f"sold: {record.sold_at or 'none'} | days held: "
             f"{row.days_held if row.days_held is not None else 'unavailable'} | "
             f"sale: {row.linked_sale_id or 'none'}"
@@ -1169,7 +1177,7 @@ def _print_sales_report(report) -> None:
         print(
             f"{sale.sale_id} | {sale.inventory_id} | {sale.sold_at} | "
             f"gross: {_report_money(sale.currency, sale.gross_amount)} | "
-            f"acquisition: USD {row.acquisition_cost_usd:.2f}"
+            f"acquisition: {_optional_usd(row.acquisition_cost_usd)}"
         )
         print(
             f"  reducing: {_report_money(sale.currency, row.reducing_costs)} | "
@@ -1195,7 +1203,14 @@ def _print_summary_report(report, *, start, end) -> None:
         f"  Sold: {inventory.status_counts.get('sold', 0)} | "
         f"archived: {inventory.status_counts.get('archived', 0)}"
     )
-    print(f"  Acquisition capital tied up: USD {inventory.active_capital_usd:.2f}")
+    print(
+        "  Acquisition capital tied up: "
+        + (
+            f"USD {inventory.active_capital_usd:.2f}"
+            if inventory.active_capital_usd is not None
+            else "unavailable (unknown acquisition cost)"
+        )
+    )
     average_cost = inventory.average_active_acquisition_cost_usd
     print(f"  Average active acquisition cost: {_report_decimal(average_cost)}")
     listed_age = _report_decimal(inventory.average_listed_age_days, suffix=" days")
@@ -1212,7 +1227,14 @@ def _print_summary_report(report, *, start, end) -> None:
     print(f"  Sales count: {len(sales.rows)}")
     for currency, amount in sorted(sales.gross_by_currency.items()):
         print(f"  Gross sales ({currency}): {_report_money(currency, amount)}")
-    print(f"  Acquisition cost / COGS (USD): USD {sales.acquisition_cost_usd:.2f}")
+    print(
+        "  Acquisition cost / COGS (USD): "
+        + (
+            f"USD {sales.acquisition_cost_usd:.2f}"
+            if sales.acquisition_cost_usd is not None
+            else "unavailable (unknown acquisition cost)"
+        )
+    )
     for currency in sorted(set(sales.reducing_by_currency) | set(sales.increasing_by_currency)):
         print(
             f"  Recorded reducing costs ({currency}): "

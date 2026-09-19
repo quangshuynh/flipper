@@ -122,6 +122,36 @@ def test_sales_aggregate_exact_economics_reconciliation_margin_and_days(tmp_path
     assert report.median_days_held == Decimal("32.0")
 
 
+def test_unknown_acquisition_makes_accounting_and_holding_time_unavailable(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    item, _ = store.adopt_ebay_listing(
+        "Q0001",
+        title="Unknown history",
+        source=None,
+        acquired_at=None,
+        acquisition_cost=None,
+        marketplace_item_id="item-1",
+        marketplace_sku="Q0001",
+    )
+    sale, _ = store.import_sale(
+        inventory_id=item.inventory_id,
+        marketplace="eBay",
+        external_order_id="order-1",
+        external_line_item_id="line-1",
+        marketplace_sku="Q0001",
+        quantity=1,
+        gross_amount=Decimal("75"),
+        currency="USD",
+        sold_at=datetime(2026, 9, 18, tzinfo=timezone.utc),
+    )
+    report = sales_report(store.list(), [sale], [], {})
+    assert report.rows[0].acquisition_cost_usd is None
+    assert report.rows[0].economics is None
+    assert report.rows[0].days_held is None
+    assert report.acquisition_cost_usd is None
+    assert report.recorded_profit_by_currency == {}
+
+
 def test_zero_gross_and_mixed_currency_do_not_invent_profit_or_margin(tmp_path):
     store = InventoryStore(tmp_path / "inventory.db")
     _sell(store, 1, gross="0", currency="USD")

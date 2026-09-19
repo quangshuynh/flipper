@@ -2,7 +2,9 @@
 
 Inventory is authoritative local state. `python main.py inventory --help` shows add, list, show,
 update, and lifecycle commands. Records retain source, acquisition date, exact integer USD cents,
-quantity, notes, optional marketplace linkage, and timestamps. Generic updates cannot bypass
+quantity, notes, optional marketplace linkage, and timestamps. A missing-local eBay import may have
+unknown historical source, acquisition date, or cost; these remain visibly unknown and are never
+treated as zero. Notes can be edited or cleared from inventory detail. Generic updates cannot bypass
 lifecycle rules.
 
 ## Attachments

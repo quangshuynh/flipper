@@ -69,6 +69,22 @@ def test_listing_summary_and_explicit_import(monkeypatch, capsys, tmp_path):
     assert len(main.InventoryStore(database).list()) == 1
 
 
+def test_listing_import_cli_allows_unknown_history(monkeypatch, tmp_path):
+    database = tmp_path / "inventory.db"
+    monkeypatch.setattr(main, "_seller_oauth", lambda: OAuth())
+    monkeypatch.setattr(
+        main.ActiveListingsClient,
+        "get_active_listings",
+        lambda self: [active_listing("Q0002", "item-2")],
+    )
+    assert main.main(["ebay", "import-listing", "Q0002", "--database", str(database)]) == 0
+    record = main.InventoryStore(database).get("Q0002")
+    assert record.source is None
+    assert record.acquired_at is None
+    assert record.acquisition_cost is None
+    assert record.marketplace_sku == "Q0002"
+
+
 def test_orders_output(monkeypatch, capsys):
     monkeypatch.setattr(main, "_seller_oauth", lambda: OAuth())
     monkeypatch.setattr(main.FulfillmentClient, "get_orders", lambda self, start, end: [order()])
