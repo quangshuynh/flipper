@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from acquisition import acquire_from_analysis, analyze_listing
 from collectors.json_feed_collector import DEFAULT_JSON_PATH, fetch_listings
 from deals.categories import normalize_category
+from deals.comparables import Comparable, ComparableCondition, ComparableEvidenceSet, ComparableType
 from deals.economics import calculate_economics
 from deals.models import (
     CostComponent,
@@ -26,6 +27,7 @@ from deals.models import (
     TimeToSale,
 )
 from deals.travel import trip_from_values
+from deals.scoring import calculate_deal_score
 from ebay.finance_reconciliation import (
     FinanceMatchStatus,
     reconcile_finance_transactions,
@@ -399,6 +401,14 @@ def build_parser() -> argparse.ArgumentParser:
     deal_analyze.add_argument("--category", required=True)
     deal_analyze.add_argument("--currency", default="USD")
     deal_analyze.add_argument("--base-price", type=Decimal, required=True)
+    deal_analyze.add_argument(
+        "--sold-comparable",
+        action="append",
+        type=Decimal,
+        default=[],
+        help="sold comparable price in --currency; repeat for each comparable",
+    )
+    deal_analyze.add_argument("--condition", help="recorded source condition text")
     deal_analyze.add_argument("--tax", type=Decimal)
     deal_analyze.add_argument("--inbound-shipping", type=Decimal)
     deal_analyze.add_argument("--travel-cost", type=Decimal)
@@ -633,6 +643,25 @@ def run_deals_command(args: argparse.Namespace) -> int:
             other_selling_cost=estimate(args.other_selling_cost),
             time_to_sale=time_to_sale,
         )
+        comparable_evidence = ComparableEvidenceSet(
+            tuple(
+                Comparable(
+                    evidence_type=ComparableType.SOLD,
+                    source="CLI user research",
+                    price=DealMoney(amount, args.currency),
+                    observed_date=date.today(),
+                    condition=ComparableCondition.UNKNOWN,
+                )
+                for amount in args.sold_comparable
+            ),
+            as_of=date.today(),
+        )
+        deal_score = calculate_deal_score(
+            asking_price=DealMoney(args.base_price, args.currency),
+            economics=economics,
+            evidence=comparable_evidence,
+            condition_known=bool(args.condition),
+        )
         print(f"{args.title} | {category.label} | {args.source}")
         print(f"Economics state: {economics.state.value.replace('_', ' ')}")
         for label, value in (
@@ -644,6 +673,17 @@ def run_deals_command(args: argparse.Namespace) -> int:
             print(f"{label}: {_format_deal_money(value)}")
         roi_display = economics.roi if economics.roi is not None else economics.roi_state.value
         print(f"Expected ROI: {roi_display}")
+        if deal_score.available:
+            print(
+                f"Deal Score: {deal_score.value} / 10 · {deal_score.label} "
+                f"· Confidence: {deal_score.confidence.value}"
+            )
+            for component in deal_score.components:
+                print(f"  {component.name}: {component.assessment} — {component.explanation}")
+        else:
+            print("Deal Score: Unavailable")
+            for reason in deal_score.unavailable_reasons:
+                print(f"  Evidence needed: {reason}")
         if trip:
             print(
                 "Round-trip mileage: "

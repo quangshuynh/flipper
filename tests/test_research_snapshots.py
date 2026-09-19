@@ -123,3 +123,9 @@ def test_corrupt_payload_is_rejected_on_read_without_executing_content(tmp_path)
     with pytest.raises(SnapshotPayloadError):
         store.get_research_snapshot(record.snapshot_id)
     assert store.list_research_snapshots()[0].snapshot_id == record.snapshot_id
+
+
+def test_old_snapshot_payload_remains_valid_without_a_backfilled_score(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    old = save(store)
+    assert "deal_score" not in store.get_research_snapshot(old.snapshot_id).payload["derived"]
