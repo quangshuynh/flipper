@@ -11,7 +11,8 @@ model exists for it.
 2. Source and category normalization produce a `DealOpportunity`.
 3. Exact inputs produce `DealEconomics`.
 4. Liquidity, confidence, and risk evidence add context.
-5. Evaluation and comparison expose dimensions and tradeoffs without a weighted global score.
+5. Evaluation exposes economics and evidence; Deal Score v1 summarizes only opportunities that
+   meet its explicit evidence requirements. Comparison still preserves the underlying dimensions.
 
 The existing PC pipeline remains a specialization: its deterministic component parser, optional AI
 enrichment, heuristic pricing, and legacy score are unchanged. An adapter exposes known PC results
@@ -105,6 +106,43 @@ dispersion, recency, and comp quality. Confidence is decomposed into pricing, ti
 condition, and category-match evidence. Missing evidence stays missing. Risks are explicit
 code-plus-explanation factors, not an opaque score.
 
+## Explainable Deal Score v1
+
+Deal Score is deterministic decision support from the evidence currently recorded. It ranges from
+1.0 to 10.0; it is not a guarantee, a scam detector, a prediction of profit, or an instruction to
+purchase. The labels are: 1.0–2.9 Very unfavorable, 3.0–4.9 Weak, 5.0–6.9 Marginal / needs
+investigation, 7.0–8.9 Promising, and 9.0–10.0 Exceptional potential.
+
+A score is available only with a positive same-currency sold-comparable median and complete
+existing modeled economics: landed cost, positive expected net proceeds, and expected net profit.
+Active asking listings never substitute for sold evidence. Missing optional costs stay unknown and
+make economics incomplete; explicit zero and not-applicable remain distinct and usable.
+
+```text
+price discount = (sold median - asking price) / sold median
+price component = linear 1–10 from -25% to +75% discount, clamped (45%)
+
+ROI component = linear 1–10 from -25% to 300% ROI, clamped
+net-margin component = linear 1–10 from -25% to 75% net margin, clamped
+economic spread = 60% ROI component + 40% net-margin component (55%)
+
+Deal Score = 45% price component + 55% economic-spread component
+```
+
+The result is clamped to 1.0–10.0 and rounded once to one decimal with decimal half-up rounding.
+Existing landed cost includes modeled travel and explicit other acquisition cost, so each affects
+the economic component once. There is no automatic repair estimate. Target condition is free text,
+so it does not change the v1 score.
+
+Confidence is separate: Low, Medium, or High from sold-comparable count, sold-price dispersion
+`(maximum - minimum) / median`, and whether source condition is recorded. One comp can support a
+score but cannot establish dispersion, so a high score with Low confidence is possible. Condition
+completeness affects confidence only; Flipper does not interpret the text.
+
+Working pages use current ephemeral research. A saved research snapshot freezes the score,
+confidence, component explanations, algorithm version, or unavailable reasons in its immutable
+payload. Older snapshots are not backfilled. Realized outcome never changes the decision-time score.
+
 ## Comparison example
 
 | Dimension | Opportunity A | Opportunity B |
@@ -125,6 +163,7 @@ This calculates a synthetic opportunity and writes nothing to inventory:
 ```bash
 python main.py deals analyze --title "Test opportunity" --source local \
   --category electronics --base-price 55 --expected-resale 95 \
+  --sold-comparable 90 --sold-comparable 100 --condition "Used, tested" \
   --one-way-distance 12 --vehicle-mpg 28 --gas-price 3.45 \
   --additional-travel-cost 2 --travel-minutes 40 \
   --minimum-sale-days 4 --maximum-sale-days 7
