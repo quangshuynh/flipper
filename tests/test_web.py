@@ -973,6 +973,11 @@ def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_pa
     assert "Start with a deliberate search" in landing.text
     assert "Used mirrorless camera" in results.text
     assert "Needs resale estimate" in results.text
+    assert 'aria-label="Deal Score"' in results.text
+    assert "Deal Score" in results.text and "Unavailable" in results.text
+    assert "sold comparable evidence in the asking-price currency is unavailable" in results.text
+    assert "5.0 / 10" not in results.text
+    assert 'href="/deals/ebay/v1|123|0">Evaluate deal</a>' in results.text
     assert 'class="active" href="/deals"' in results.text
     assert "Profit velocity" in detail.text and "Unavailable" in detail.text
     assert "USD 20.00" in analyzed.text
@@ -1460,6 +1465,13 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
     assert "20 miles" in detail.text and "45 minutes" in detail.text
     assert "User-provided source fact" in detail.text
     assert "Snapshot camera" in history.text
+    cards = client.get("/deals")
+    assert cards.status_code == 200
+    assert "From latest saved evaluation" in cards.text
+    assert "Confidence: Low" in cards.text
+    assert "Promising" in cards.text or "Exceptional potential" in cards.text
+    assert 'aria-label="Deal Score"' in cards.text
+    assert f'href="{path}">Evaluate deal</a>' in cards.text
 
     rows = next(iter(web_app.research_store._sessions.values()))
     for row in list(rows[next(iter(rows))]):

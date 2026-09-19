@@ -4,7 +4,12 @@ from decimal import Decimal
 from deals.comparables import Comparable, ComparableCondition, ComparableEvidenceSet, ComparableType
 from deals.economics import calculate_economics
 from deals.models import CostComponent, Money
-from deals.scoring import DealScoreConfidence, calculate_deal_score
+from deals.scoring import (
+    DealScoreConfidence,
+    calculate_deal_score,
+    present_deal_score,
+    present_frozen_deal_score,
+)
 from main import main
 
 
@@ -131,3 +136,31 @@ def test_cli_uses_authoritative_score_and_explains_unavailable(capsys):
     assert "Deal Score:" in output and "/ 10" in output
     assert "Confidence: Low" in output
     assert "Price vs. sold comparables" in output
+
+
+def test_card_presentations_project_authoritative_results_without_rescoring():
+    unavailable = calculate_deal_score(
+        asking_price=Money.of("50"), economics=economics("50", "250"), evidence=evidence()
+    )
+    card = present_deal_score(unavailable)
+    assert not card.available
+    assert card.value is None
+    assert card.unavailable_reason == unavailable.unavailable_reasons[0]
+
+    available = score("50", "250", [245, 248, 250, 252, 255])
+    frozen = present_frozen_deal_score(
+        {
+            "derived": {
+                "deal_score": {
+                    "version": available.version,
+                    "value": str(available.value),
+                    "label": available.label,
+                    "confidence": available.confidence.value,
+                    "unavailable_reasons": [],
+                }
+            }
+        }
+    )
+    assert frozen.available and frozen.frozen
+    assert frozen.label == "Exceptional potential"
+    assert frozen.confidence == "High"

@@ -47,6 +47,47 @@ class DealScore:
         return self.value is not None
 
 
+@dataclass(frozen=True)
+class DealScorePresentation:
+    """Small display-only projection shared by Deal cards."""
+
+    available: bool
+    value: str | None
+    label: str | None
+    confidence: str | None
+    unavailable_reason: str | None
+    frozen: bool = False
+
+
+def present_deal_score(score: DealScore, *, frozen: bool = False) -> DealScorePresentation:
+    return DealScorePresentation(
+        available=score.available,
+        value=str(score.value) if score.value is not None else None,
+        label=score.label,
+        confidence=score.confidence.value if score.confidence else None,
+        unavailable_reason=(score.unavailable_reasons[0] if score.unavailable_reasons else None),
+        frozen=frozen,
+    )
+
+
+def present_frozen_deal_score(payload: dict) -> DealScorePresentation | None:
+    """Read the frozen v1 projection; older or malformed payloads remain unavailable to callers."""
+    score = payload.get("derived", {}).get("deal_score")
+    if not isinstance(score, dict) or score.get("version") != DEAL_SCORE_VERSION:
+        return None
+    reasons = score.get("unavailable_reasons")
+    reason = reasons[0] if isinstance(reasons, list) and reasons else None
+    value = score.get("value")
+    return DealScorePresentation(
+        available=value is not None,
+        value=value if isinstance(value, str) else None,
+        label=score.get("label") if isinstance(score.get("label"), str) else None,
+        confidence=(score.get("confidence") if isinstance(score.get("confidence"), str) else None),
+        unavailable_reason=reason if isinstance(reason, str) else None,
+        frozen=True,
+    )
+
+
 def _clamp(value: Decimal, low: Decimal, high: Decimal) -> Decimal:
     return max(low, min(high, value))
 
