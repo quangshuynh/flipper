@@ -1470,7 +1470,11 @@ async def ebay_order_import(request: Request):
         )
     order = selected[0]["order"]
     line = selected[0]["match"].line_item
-    selected_order = replace(order, line_items=(line,))
+    selected_order = replace(
+        order,
+        line_items=(line,),
+        source_line_count=order.source_line_count or len(order.line_items),
+    )
     result = import_ebay_sales([selected_order], store)[0]
     if result.status in {SaleImportStatus.IMPORTED, SaleImportStatus.ALREADY_IMPORTED}:
         assert result.sale is not None

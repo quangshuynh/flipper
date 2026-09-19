@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from deals.snapshots import canonical_snapshot_json, parse_snapshot_json, validate_snapshot_payload
 
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
@@ -136,7 +136,7 @@ class AttachmentRecord:
 
 @dataclass(frozen=True)
 class SaleRecord:
-    """A minimized marketplace sale with an exact scaled-integer gross amount."""
+    """A minimized sale with exact seller revenue and optional source components."""
 
     internal_id: int
     sale_id: str
@@ -149,6 +149,14 @@ class SaleRecord:
     quantity: int
     gross_amount_minor: int
     gross_amount_scale: int
+    item_revenue_minor: int | None
+    item_revenue_scale: int | None
+    buyer_shipping_minor: int | None
+    buyer_shipping_scale: int | None
+    marketplace_tax_minor: int | None
+    marketplace_tax_scale: int | None
+    checkout_total_minor: int | None
+    checkout_total_scale: int | None
     currency: str
     sold_at: str
     imported_at: str
@@ -156,6 +164,28 @@ class SaleRecord:
     @property
     def gross_amount(self) -> Decimal:
         return Decimal(self.gross_amount_minor).scaleb(-self.gross_amount_scale)
+
+    @staticmethod
+    def _optional_amount(minor: int | None, scale: int | None) -> Decimal | None:
+        if minor is None or scale is None:
+            return None
+        return Decimal(minor).scaleb(-scale)
+
+    @property
+    def item_revenue(self) -> Decimal | None:
+        return self._optional_amount(self.item_revenue_minor, self.item_revenue_scale)
+
+    @property
+    def buyer_shipping(self) -> Decimal | None:
+        return self._optional_amount(self.buyer_shipping_minor, self.buyer_shipping_scale)
+
+    @property
+    def marketplace_tax(self) -> Decimal | None:
+        return self._optional_amount(self.marketplace_tax_minor, self.marketplace_tax_scale)
+
+    @property
+    def checkout_total(self) -> Decimal | None:
+        return self._optional_amount(self.checkout_total_minor, self.checkout_total_scale)
 
 
 @dataclass(frozen=True)
@@ -818,6 +848,21 @@ class InventoryStore:
                     WHERE marketplace = 'ebay' COLLATE NOCASE AND marketplace_item_id IS NOT NULL"""
                 )
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (13)")
+            if 14 not in versions:
+                # Existing gross amounts remain authoritative aggregates. Their newly
+                # introduced composition is unknown and must not be invented.
+                for name in (
+                    "item_revenue_minor",
+                    "item_revenue_scale",
+                    "buyer_shipping_minor",
+                    "buyer_shipping_scale",
+                    "marketplace_tax_minor",
+                    "marketplace_tax_scale",
+                    "checkout_total_minor",
+                    "checkout_total_scale",
+                ):
+                    connection.execute(f"ALTER TABLE sales ADD COLUMN {name} INTEGER")
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (14)")
             foreign_key_violation = connection.execute("PRAGMA foreign_key_check").fetchone()
             if foreign_key_violation is not None:
                 raise RuntimeError("inventory migration failed foreign-key integrity validation")
@@ -1312,6 +1357,10 @@ class InventoryStore:
         gross_amount: Decimal,
         currency: str,
         sold_at: datetime,
+        item_revenue: Decimal | None = None,
+        buyer_shipping: Decimal | None = None,
+        marketplace_tax: Decimal | None = None,
+        checkout_total: Decimal | None = None,
     ) -> tuple[SaleRecord, bool]:
         """Atomically insert one sale and apply its authoritative sold lifecycle state."""
         marketplace = self._required(marketplace, "marketplace")
@@ -1324,6 +1373,24 @@ class InventoryStore:
         if quantity != 1:
             raise SaleImportError("sale import currently supports only quantity 1")
         amount_minor, amount_scale = self._scaled_amount(gross_amount)
+        optional_amounts = []
+        for value in (item_revenue, buyer_shipping, marketplace_tax, checkout_total):
+            optional_amounts.extend((None, None) if value is None else self._scaled_amount(value))
+        (
+            item_minor,
+            item_scale,
+            shipping_minor,
+            shipping_scale,
+            tax_minor,
+            tax_scale,
+            total_minor,
+            total_scale,
+        ) = optional_amounts
+        if item_revenue is not None and buyer_shipping is not None:
+            if gross_amount != item_revenue + buyer_shipping:
+                raise SaleImportError(
+                    "seller revenue must equal item revenue plus buyer-paid shipping"
+                )
         sold_timestamp = self._timestamp(sold_at, "sale timestamp")
         imported_timestamp = self._utc_now()
         identity = (marketplace, external_order_id, external_line_item_id)
@@ -1351,6 +1418,14 @@ class InventoryStore:
                 quantity,
                 amount_minor,
                 amount_scale,
+                item_minor,
+                item_scale,
+                shipping_minor,
+                shipping_scale,
+                tax_minor,
+                tax_scale,
+                total_minor,
+                total_scale,
                 currency,
                 sold_timestamp,
             )
@@ -1361,10 +1436,85 @@ class InventoryStore:
                     existing["quantity"],
                     existing["gross_amount_minor"],
                     existing["gross_amount_scale"],
+                    existing["item_revenue_minor"],
+                    existing["item_revenue_scale"],
+                    existing["buyer_shipping_minor"],
+                    existing["buyer_shipping_scale"],
+                    existing["marketplace_tax_minor"],
+                    existing["marketplace_tax_scale"],
+                    existing["checkout_total_minor"],
+                    existing["checkout_total_scale"],
                     existing["currency"],
                     existing["sold_at"],
                 )
                 if persisted != immutable:
+                    legacy_identity_matches = (
+                        existing["inventory_internal_id"],
+                        existing["marketplace_sku"],
+                        existing["quantity"],
+                        existing["currency"],
+                        existing["sold_at"],
+                    ) == (
+                        item["internal_id"],
+                        marketplace_sku,
+                        quantity,
+                        currency,
+                        sold_timestamp,
+                    )
+                    legacy_components_unknown = all(
+                        existing[name] is None
+                        for name in (
+                            "item_revenue_minor",
+                            "item_revenue_scale",
+                            "buyer_shipping_minor",
+                            "buyer_shipping_scale",
+                            "marketplace_tax_minor",
+                            "marketplace_tax_scale",
+                            "checkout_total_minor",
+                            "checkout_total_scale",
+                        )
+                    )
+                    existing_gross = Decimal(existing["gross_amount_minor"]).scaleb(
+                        -existing["gross_amount_scale"]
+                    )
+                    if (
+                        legacy_identity_matches
+                        and legacy_components_unknown
+                        and item_revenue is not None
+                        and buyer_shipping is not None
+                        and existing_gross == item_revenue
+                    ):
+                        connection.execute(
+                            """UPDATE sales SET
+                                gross_amount_minor = ?, gross_amount_scale = ?,
+                                item_revenue_minor = ?, item_revenue_scale = ?,
+                                buyer_shipping_minor = ?, buyer_shipping_scale = ?,
+                                marketplace_tax_minor = ?, marketplace_tax_scale = ?,
+                                checkout_total_minor = ?, checkout_total_scale = ?
+                            WHERE internal_id = ?""",
+                            (
+                                amount_minor,
+                                amount_scale,
+                                item_minor,
+                                item_scale,
+                                shipping_minor,
+                                shipping_scale,
+                                tax_minor,
+                                tax_scale,
+                                total_minor,
+                                total_scale,
+                                existing["internal_id"],
+                            ),
+                        )
+                        enriched = connection.execute(
+                            """SELECT sales.*, inventory_items.inventory_id
+                            FROM sales JOIN inventory_items
+                              ON inventory_items.internal_id = sales.inventory_internal_id
+                            WHERE sales.internal_id = ?""",
+                            (existing["internal_id"],),
+                        ).fetchone()
+                        connection.commit()
+                        return self._sale_record(enriched), True
                     raise SaleConflictError(
                         "external sale identity conflicts with the persisted sale record"
                     )
@@ -1381,8 +1531,11 @@ class InventoryStore:
                 """INSERT INTO sales (
                     sale_id, inventory_internal_id, marketplace, external_order_id,
                     external_line_item_id, marketplace_sku, quantity, gross_amount_minor,
-                    gross_amount_scale, currency, sold_at, imported_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    gross_amount_scale, item_revenue_minor, item_revenue_scale,
+                    buyer_shipping_minor, buyer_shipping_scale, marketplace_tax_minor,
+                    marketplace_tax_scale, checkout_total_minor, checkout_total_scale,
+                    currency, sold_at, imported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     sale_id,
                     item["internal_id"],
@@ -1393,6 +1546,14 @@ class InventoryStore:
                     quantity,
                     amount_minor,
                     amount_scale,
+                    item_minor,
+                    item_scale,
+                    shipping_minor,
+                    shipping_scale,
+                    tax_minor,
+                    tax_scale,
+                    total_minor,
+                    total_scale,
                     currency,
                     sold_timestamp,
                     imported_timestamp,
@@ -2184,6 +2345,14 @@ class InventoryStore:
             quantity=row["quantity"],
             gross_amount_minor=row["gross_amount_minor"],
             gross_amount_scale=row["gross_amount_scale"],
+            item_revenue_minor=row["item_revenue_minor"],
+            item_revenue_scale=row["item_revenue_scale"],
+            buyer_shipping_minor=row["buyer_shipping_minor"],
+            buyer_shipping_scale=row["buyer_shipping_scale"],
+            marketplace_tax_minor=row["marketplace_tax_minor"],
+            marketplace_tax_scale=row["marketplace_tax_scale"],
+            checkout_total_minor=row["checkout_total_minor"],
+            checkout_total_scale=row["checkout_total_scale"],
             currency=row["currency"],
             sold_at=row["sold_at"],
             imported_at=row["imported_at"],

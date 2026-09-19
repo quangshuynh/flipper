@@ -1041,12 +1041,22 @@ def run_sales_command(args: argparse.Namespace) -> int:
         print(f"  Order line: {sale.external_line_item_id}")
         print(f"  SKU: {sale.marketplace_sku}")
         print(f"  Quantity: {sale.quantity}")
-        print(f"  Gross: {gross}")
+        if sale.item_revenue is not None:
+            print(f"  Item revenue: {sale.currency} {sale.item_revenue}")
+            shipping = (
+                f"{sale.currency} {sale.buyer_shipping}"
+                if sale.buyer_shipping is not None
+                else "unknown"
+            )
+            print(f"  Buyer-paid shipping revenue: {shipping}")
+        print(f"  Seller revenue: {gross}")
+        if sale.marketplace_tax is not None:
+            print(f"  Marketplace-collected tax (excluded): {sale.currency} {sale.marketplace_tax}")
         print(f"  Sold at: {sale.sold_at}")
         print(f"  Imported at: {sale.imported_at}")
         costs = store.list_sale_costs(sale.sale_id)
         print("Economics (recorded local data)")
-        print(f"  Gross sale: {gross}")
+        print(f"  Seller revenue: {gross}")
         inventory = store.get(sale.inventory_id)
         if sale.currency != "USD" or inventory.acquisition_cost is None:
             print("  Recorded profit: unavailable")

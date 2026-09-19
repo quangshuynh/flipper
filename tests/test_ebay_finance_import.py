@@ -326,6 +326,7 @@ def test_v5_migration_preserves_manual_cost_and_adds_empty_external_identity(tmp
             (11,),
             (12,),
             (13,),
+            (14,),
         ]
 
 
@@ -362,6 +363,7 @@ def test_v5_migration_rejects_unidentified_external_history(tmp_path):
             (11,),
             (12,),
             (13,),
+            (14,),
         ]
 
 

@@ -27,7 +27,10 @@ def order():
         payment_status="PAID",
         cancellation_status=None,
         line_items=(EbayOrderLineItem("1", "2", "Sony Camera", None, 1, None),),
-        pricing=OrderPricingSummary(total=Money(Decimal("42.99"), "USD")),
+        pricing=OrderPricingSummary(
+            shipping=Money(Decimal("0"), "USD"),
+            total=Money(Decimal("42.99"), "USD"),
+        ),
     )
 
 
@@ -255,8 +258,8 @@ def test_import_sales_summary_and_local_sales_inspection(monkeypatch, tmp_path, 
     shown = capsys.readouterr().out
     assert "Inventory: Q0001" in shown
     assert "Order: 12-34567-89012" in shown
-    assert "Gross: USD 42.99" in shown
-    assert "buyer" not in shown.lower()
+    assert "Seller revenue: USD 42.99" in shown
+    assert "private-buyer" not in shown.lower()
 
 
 def test_import_sales_repeat_reports_already_imported(monkeypatch, tmp_path, capsys):
