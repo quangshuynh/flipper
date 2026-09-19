@@ -1,8 +1,90 @@
 {% extends "base.html" %}
+{% macro score_card(score) %}
+<section class="deal-score-card" aria-label="Deal Score">
+  <span>Deal Score</span>
+  {% if score.available %}
+  <strong>{{ score.value }} / 10</strong>
+  <small>{{ score.label }} · {{ score.confidence }} confidence</small>
+  {% else %}
+  <strong>Unavailable</strong>
+  <small>{{ score.unavailable_reason }}</small>
+  {% endif %}
+  {% if score.frozen %}<small>From latest saved evaluation</small>{% endif %}
+</section>
+{% endmacro %}
 {% block content %}
-<section class="deals-intro panel"><p class="eyebrow">Multi-source opportunity workspace</p><h2>Find opportunities. Supply the assumptions. Keep the evidence honest.</h2><p>Search live eBay listings or add an opportunity found anywhere. Asking prices are source facts, not resale estimates or sold comparables.</p><div class="card-actions"><a class="button" href="/deals/opportunities/new">Add Opportunity</a></div></section>
-<form class="deal-search" method="get" action="/deals"><label class="search-wide">Keywords<input name="q" value="{{ q }}" required maxlength="100" placeholder="camera, graphics card, vintage watch"></label><label>Category<select name="category"><option value="">All</option>{% for item in categories %}<option value="{{ item.slug }}" {% if category == item.slug %}selected{% endif %}>{{ item.label }}</option>{% endfor %}</select></label><label>Minimum price<input name="minimum_price" value="{{ minimum_price }}" inputmode="decimal"></label><label>Maximum price<input name="maximum_price" value="{{ maximum_price }}" inputmode="decimal"></label><label>Condition<select name="condition"><option value="">Any</option>{% for value in ['NEW','USED','CERTIFIED_REFURBISHED'] %}<option value="{{ value }}" {% if condition == value %}selected{% endif %}>{{ value|replace('_', ' ')|title }}</option>{% endfor %}</select></label><label>Sort<select name="sort"><option value="relevance">eBay relevance</option><option value="price_asc" {% if sort == 'price_asc' %}selected{% endif %}>Price low to high</option><option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>Price high to low</option></select></label><button type="submit">Search eBay</button></form>
+<section class="deals-intro panel">
+  <p class="eyebrow">Multi-source opportunity workspace</p>
+  <h2>Find opportunities. Supply the assumptions. Keep the evidence honest.</h2>
+  <p>Search live eBay listings or add an opportunity found anywhere. Asking prices are source facts, not resale estimates or sold comparables.</p>
+  <div class="card-actions"><a class="button" href="/deals/opportunities/new">Add Opportunity</a></div>
+</section>
+<form class="deal-search" method="get" action="/deals">
+  <label class="search-wide">Keywords<input name="q" value="{{ q }}" required maxlength="100" placeholder="camera, graphics card, vintage watch"></label>
+  <label>Category<select name="category"><option value="">All</option>{% for item in categories %}<option value="{{ item.slug }}" {% if category == item.slug %}selected{% endif %}>{{ item.label }}</option>{% endfor %}</select></label>
+  <label>Minimum price<input name="minimum_price" value="{{ minimum_price }}" inputmode="decimal"></label>
+  <label>Maximum price<input name="maximum_price" value="{{ maximum_price }}" inputmode="decimal"></label>
+  <label>Condition<select name="condition"><option value="">Any</option>{% for value in ['NEW','USED','CERTIFIED_REFURBISHED'] %}<option value="{{ value }}" {% if condition == value %}selected{% endif %}>{{ value|replace('_', ' ')|title }}</option>{% endfor %}</select></label>
+  <label>Sort<select name="sort"><option value="relevance">eBay relevance</option><option value="price_asc" {% if sort == 'price_asc' %}selected{% endif %}>Price low to high</option><option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>Price high to low</option></select></label>
+  <button type="submit">Search eBay</button>
+</form>
 {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
-{% if results %}<form method="get" action="/deals/compare"><div class="result-head"><strong>{{ results|length }} eBay opportunities</strong><span>Choose 2–4</span><button type="submit">Compare selected</button></div><section class="deal-grid">{% for opportunity, shipping in results %}<article class="deal-card"><label class="compare-select"><input type="checkbox" name="opportunity_key" value="ebay:{{ opportunity.source_listing_id }}"> Add to comparison</label><div class="deal-card-head"><span class="badge matched">eBay API</span><span>{{ opportunity.category.label }}</span></div><h2><a href="/deals/ebay/{{ opportunity.source_listing_id }}">{{ opportunity.title }}</a></h2><dl class="deal-facts"><div><dt>Asking price</dt><dd>{{ opportunity.base_price.amount|money(opportunity.base_price.currency) }}</dd></div><div><dt>Inbound shipping</dt><dd>{% if shipping.money %}{{ shipping.money.amount|money(shipping.money.currency) }}{% else %}Unknown{% endif %}</dd></div><div><dt>Condition</dt><dd>{{ opportunity.condition or 'Unknown' }}</dd></div><div><dt>Source location</dt><dd>{{ opportunity.location_text or 'Unknown' }}</dd></div></dl><div class="evidence-strip"><strong>Needs resale estimate</strong><span>{{ opportunity.category_provenance.label }}</span></div><div class="card-actions"><a class="button" href="/deals/ebay/{{ opportunity.source_listing_id }}">Evaluate deal</a>{% if opportunity.url %}<a class="button secondary" href="{{ opportunity.url }}" target="_blank" rel="noopener noreferrer">View on eBay</a>{% endif %}</div></article>{% endfor %}</section></form>{% elif searched and not error %}<section class="panel empty"><h2>No opportunities returned</h2><p>Try broader keywords or fewer filters.</p></section>{% elif not searched %}<section class="panel empty"><h2>Start with a deliberate search</h2><p>Search eBay or add an opportunity. Flipper contacts eBay only when you submit the search.</p></section>{% endif %}
-{% if manual_opportunities %}<section class="panel"><div class="result-head"><strong>Your temporary opportunities</strong><span>Cleared when the server restarts</span></div><form method="get" action="/deals/compare"><section class="deal-grid">{% for opportunity_id, stored in manual_opportunities %}<article class="deal-card"><label class="compare-select"><input type="checkbox" name="opportunity_key" value="manual:{{ opportunity_id }}"> Add to comparison</label><div class="deal-card-head"><span class="badge matched">{{ stored.opportunity.source.value|replace('-', ' ')|title }}</span><span>User-provided</span></div><h2><a href="/deals/opportunities/{{ opportunity_id }}">{{ stored.opportunity.title }}</a></h2><p>{{ stored.opportunity.base_price.amount|money(stored.opportunity.base_price.currency) }} · {{ stored.opportunity.category.label }}</p><a class="button" href="/deals/opportunities/{{ opportunity_id }}">Evaluate deal</a></article>{% endfor %}</section><button type="submit">Compare selected</button></form></section>{% endif %}
+{% if results %}
+<form method="get" action="/deals/compare">
+  <div class="result-head"><strong>{{ results|length }} eBay opportunities</strong><span>Choose 2–4</span><button type="submit">Compare selected</button></div>
+  <section class="deal-grid">
+  {% for opportunity, shipping in results %}
+    {% set key = 'ebay:' ~ opportunity.source_listing_id %}
+    <article class="deal-card">
+      <label class="compare-select"><input type="checkbox" name="opportunity_key" value="{{ key }}"> Add to comparison</label>
+      <div class="deal-card-head"><span class="badge matched">eBay API</span><span>{{ opportunity.category.label }}</span></div>
+      <h2><a href="/deals/ebay/{{ opportunity.source_listing_id }}">{{ opportunity.title }}</a></h2>
+      <dl class="deal-facts">
+        <div><dt>Asking price</dt><dd>{{ opportunity.base_price.amount|money(opportunity.base_price.currency) }}</dd></div>
+        <div><dt>Inbound shipping</dt><dd>{% if shipping.money %}{{ shipping.money.amount|money(shipping.money.currency) }}{% else %}Unknown{% endif %}</dd></div>
+        <div><dt>Condition</dt><dd>{{ opportunity.condition or 'Unknown' }}</dd></div>
+        <div><dt>Source location</dt><dd>{{ opportunity.location_text or 'Unknown' }}</dd></div>
+      </dl>
+      {% if card_scores[key].frozen %}
+      <div class="evidence-strip"><strong>Saved evaluation available</strong><span>Latest immutable research snapshot</span></div>
+      {% else %}
+      <div class="evidence-strip"><strong>Needs resale estimate</strong><span>{{ opportunity.category_provenance.label }}</span></div>
+      {% endif %}
+      {{ score_card(card_scores[key]) }}
+      <div class="card-actions"><a class="button" href="/deals/ebay/{{ opportunity.source_listing_id }}">Evaluate deal</a>{% if opportunity.url %}<a class="button secondary" href="{{ opportunity.url }}" target="_blank" rel="noopener noreferrer">View on eBay</a>{% endif %}</div>
+    </article>
+  {% endfor %}
+  </section>
+</form>
+{% elif searched and not error %}
+<section class="panel empty"><h2>No opportunities returned</h2><p>Try broader keywords or fewer filters.</p></section>
+{% elif not searched %}
+<section class="panel empty"><h2>Start with a deliberate search</h2><p>Search eBay or add an opportunity. Flipper contacts eBay only when you submit the search.</p></section>
+{% endif %}
+{% if manual_opportunities %}
+<section class="panel">
+  <div class="result-head"><strong>Your temporary opportunities</strong><span>Cleared when the server restarts</span></div>
+  <form method="get" action="/deals/compare">
+    <section class="deal-grid">
+    {% for opportunity_id, stored in manual_opportunities %}
+      {% set key = 'manual:' ~ opportunity_id %}
+      <article class="deal-card">
+        <label class="compare-select"><input type="checkbox" name="opportunity_key" value="{{ key }}"> Add to comparison</label>
+        <div class="deal-card-head"><span class="badge matched">{{ stored.opportunity.source.value|replace('-', ' ')|title }}</span><span>User-provided</span></div>
+        <h2><a href="/deals/opportunities/{{ opportunity_id }}">{{ stored.opportunity.title }}</a></h2>
+        <p>{{ stored.opportunity.base_price.amount|money(stored.opportunity.base_price.currency) }} · {{ stored.opportunity.category.label }}</p>
+        {% if card_scores[key].frozen %}
+        <div class="evidence-strip"><strong>Saved evaluation available</strong><span>Latest immutable research snapshot</span></div>
+        {% else %}
+        <div class="evidence-strip"><strong>Needs resale estimate</strong><span>Record assumptions and sold evidence</span></div>
+        {% endif %}
+        {{ score_card(card_scores[key]) }}
+        <div class="card-actions"><a class="button" href="/deals/opportunities/{{ opportunity_id }}">Evaluate deal</a></div>
+      </article>
+    {% endfor %}
+    </section>
+    <button type="submit">Compare selected</button>
+  </form>
+</section>
+{% endif %}
 {% endblock %}

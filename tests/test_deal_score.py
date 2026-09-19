@@ -1,10 +1,18 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from deals.comparables import Comparable, ComparableCondition, ComparableEvidenceSet, ComparableType
 from deals.economics import calculate_economics
 from deals.models import CostComponent, Money
-from deals.scoring import DealScoreConfidence, calculate_deal_score
+from deals.scoring import (
+    DealScore,
+    DealScoreConfidence,
+    calculate_deal_score,
+    present_deal_score,
+    present_frozen_deal_score,
+)
 from main import main
 
 
@@ -131,3 +139,55 @@ def test_cli_uses_authoritative_score_and_explains_unavailable(capsys):
     assert "Deal Score:" in output and "/ 10" in output
     assert "Confidence: Low" in output
     assert "Price vs. sold comparables" in output
+
+
+def test_card_presentations_project_authoritative_results_without_rescoring():
+    unavailable = calculate_deal_score(
+        asking_price=Money.of("50"), economics=economics("50", "250"), evidence=evidence()
+    )
+    card = present_deal_score(unavailable)
+    assert not card.available
+    assert card.value is None
+    assert card.unavailable_reason == "Needs sold comps"
+
+    available = score("50", "250", [245, 248, 250, 252, 255])
+    frozen = present_frozen_deal_score(
+        {
+            "derived": {
+                "deal_score": {
+                    "version": available.version,
+                    "value": str(available.value),
+                    "label": available.label,
+                    "confidence": available.confidence.value,
+                    "unavailable_reasons": [],
+                }
+            }
+        }
+    )
+    assert frozen.available and frozen.frozen
+    assert frozen.label == "Exceptional potential"
+    assert frozen.confidence == "High"
+
+
+@pytest.mark.parametrize(
+    ("reasons", "expected"),
+    [
+        (
+            ("sold comparable evidence in the asking-price currency is unavailable",),
+            "Needs sold comps",
+        ),
+        (("modeled economics are incomplete",), "Needs assumptions"),
+        (("landed cost and expected net proceeds are required",), "Needs cost estimate"),
+        (("expected net proceeds must be greater than zero",), "Needs resale estimate"),
+        (
+            (
+                "sold comparable evidence in the asking-price currency is unavailable",
+                "modeled economics are incomplete",
+            ),
+            "Needs evaluation",
+        ),
+    ],
+)
+def test_card_unavailable_copy_is_concise_and_requirement_specific(reasons, expected):
+    result = DealScore("deal-score-v1", None, None, None, unavailable_reasons=reasons)
+    assert present_deal_score(result).unavailable_reason == expected

@@ -129,3 +129,17 @@ def test_old_snapshot_payload_remains_valid_without_a_backfilled_score(tmp_path)
     store = InventoryStore(tmp_path / "inventory.db")
     old = save(store)
     assert "deal_score" not in store.get_research_snapshot(old.snapshot_id).payload["derived"]
+
+
+def test_latest_snapshot_lookup_is_bounded_and_returns_payload(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db")
+    first = save(store, token="1" * 32, title="First")
+    newest = save(store, token="2" * 32, title="Newest")
+    rows = store.latest_research_snapshots_by_opportunity(("manual:working-id", "missing"))
+    assert rows["manual:working-id"].snapshot_id == newest.snapshot_id
+    assert rows["manual:working-id"].payload["opportunity"]["title"] == "Newest"
+    assert first.snapshot_id != newest.snapshot_id
+    with pytest.raises(ValueError, match="at most 50"):
+        store.latest_research_snapshots_by_opportunity(
+            tuple(f"manual:{index}" for index in range(51))
+        )

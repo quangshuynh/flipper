@@ -46,7 +46,11 @@ from deals.models import (
 )
 from deals.research import EphemeralResearchStore
 from deals.snapshots import SnapshotPayloadError, build_snapshot_payload
-from deals.scoring import calculate_deal_score
+from deals.scoring import (
+    calculate_deal_score,
+    present_deal_score,
+    present_frozen_deal_score,
+)
 from deals.travel import TripEstimate, trip_from_values
 from ebay.compliance import app
 from ebay.discovery import DiscoveryConfig, EbayDiscoveryClient, EbayDiscoveryError
@@ -903,6 +907,32 @@ def deals_page(
         results.sort(key=lambda row: row[0].base_price.amount, reverse=sort.endswith("desc"))
     else:
         sort = "relevance"
+    manual_opportunities = research_store.list_opportunities(_research_session(request))
+    card_inputs = [
+        (f"ebay:{opportunity.source_listing_id}", opportunity, shipping)
+        for opportunity, shipping in results
+    ] + [
+        (f"manual:{opportunity_id}", stored.opportunity, stored.inbound_shipping)
+        for opportunity_id, stored in manual_opportunities
+    ]
+    identities = tuple(key for key, _, _ in card_inputs)
+    snapshots = _store().latest_research_snapshots_by_opportunity(identities)
+    card_scores = {}
+    for key, opportunity, shipping in card_inputs:
+        frozen = snapshots.get(key)
+        presentation = present_frozen_deal_score(frozen.payload) if frozen else None
+        if presentation is None:
+            evaluation, _ = _deal_analysis(opportunity, shipping, {})
+            evidence = research_store.evidence_set(_research_session(request), key, as_of=_today())
+            presentation = present_deal_score(
+                calculate_deal_score(
+                    asking_price=opportunity.base_price,
+                    economics=evaluation.economics,
+                    evidence=evidence,
+                    condition_known=bool(opportunity.condition),
+                )
+            )
+        card_scores[key] = presentation
     return _render(
         request,
         "deals.html",
@@ -919,7 +949,8 @@ def deals_page(
         condition=condition,
         sort=sort,
         page=page,
-        manual_opportunities=research_store.list_opportunities(_research_session(request)),
+        manual_opportunities=manual_opportunities,
+        card_scores=card_scores,
     )
 
 

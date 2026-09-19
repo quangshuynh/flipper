@@ -2505,6 +2505,33 @@ class InventoryStore:
             ).fetchall()
         return [self._research_snapshot_record(row, include_payload=False) for row in rows]
 
+    def latest_research_snapshots_by_opportunity(
+        self, opportunity_identities: tuple[str, ...]
+    ) -> dict[str, ResearchSnapshotRecord]:
+        """Return the newest immutable snapshot for each requested bounded identity."""
+        self.initialize()
+        identities = tuple(dict.fromkeys(opportunity_identities))
+        if not identities:
+            return {}
+        if len(identities) > 50:
+            raise ValueError("at most 50 opportunity identities may be requested")
+        placeholders = ",".join("?" for _ in identities)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT research_snapshots.*, inventory_items.inventory_id "
+                "FROM research_snapshots LEFT JOIN inventory_items "
+                "ON inventory_items.internal_id = research_snapshots.inventory_internal_id "
+                f"WHERE opportunity_identity IN ({placeholders}) "
+                "ORDER BY saved_at DESC, research_snapshots.internal_id DESC",
+                identities,
+            ).fetchall()
+        latest: dict[str, ResearchSnapshotRecord] = {}
+        for row in rows:
+            identity = row["opportunity_identity"]
+            if identity not in latest:
+                latest[identity] = self._research_snapshot_record(row)
+        return latest
+
     def link_research_snapshot(self, snapshot_id: str, inventory_id: str) -> ResearchSnapshotRecord:
         snapshot = self.get_research_snapshot(snapshot_id)
         item = self.get(inventory_id)

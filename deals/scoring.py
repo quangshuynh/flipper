@@ -47,6 +47,78 @@ class DealScore:
         return self.value is not None
 
 
+@dataclass(frozen=True)
+class DealScorePresentation:
+    """Small display-only projection shared by Deal cards."""
+
+    available: bool
+    value: str | None
+    label: str | None
+    confidence: str | None
+    unavailable_reason: str | None
+    frozen: bool = False
+
+
+def _concise_unavailable_reason(reasons: tuple[str, ...]) -> str | None:
+    categories: set[str] = set()
+    for reason in reasons:
+        if "sold comparable evidence" in reason or "sold comparable median" in reason:
+            categories.add("sold_comps")
+        elif "asking price" in reason:
+            categories.add("asking_price")
+        elif "landed cost" in reason:
+            categories.add("cost")
+        elif "modeled economics" in reason:
+            categories.add("assumptions")
+        elif "expected net proceeds" in reason:
+            categories.add("resale")
+        else:
+            categories.add("other")
+    if len(categories) != 1:
+        return "Needs evaluation" if categories else None
+    return {
+        "sold_comps": "Needs sold comps",
+        "asking_price": "Needs asking price",
+        "cost": "Needs cost estimate",
+        "assumptions": "Needs assumptions",
+        "resale": "Needs resale estimate",
+        "other": "Needs evaluation",
+    }[next(iter(categories))]
+
+
+def present_deal_score(score: DealScore, *, frozen: bool = False) -> DealScorePresentation:
+    return DealScorePresentation(
+        available=score.available,
+        value=str(score.value) if score.value is not None else None,
+        label=score.label,
+        confidence=score.confidence.value if score.confidence else None,
+        unavailable_reason=_concise_unavailable_reason(score.unavailable_reasons),
+        frozen=frozen,
+    )
+
+
+def present_frozen_deal_score(payload: dict) -> DealScorePresentation | None:
+    """Read the frozen v1 projection; older or malformed payloads remain unavailable to callers."""
+    score = payload.get("derived", {}).get("deal_score")
+    if not isinstance(score, dict) or score.get("version") != DEAL_SCORE_VERSION:
+        return None
+    reasons = score.get("unavailable_reasons")
+    normalized_reasons = (
+        tuple(reason for reason in reasons if isinstance(reason, str))
+        if isinstance(reasons, list)
+        else ()
+    )
+    value = score.get("value")
+    return DealScorePresentation(
+        available=value is not None,
+        value=value if isinstance(value, str) else None,
+        label=score.get("label") if isinstance(score.get("label"), str) else None,
+        confidence=(score.get("confidence") if isinstance(score.get("confidence"), str) else None),
+        unavailable_reason=_concise_unavailable_reason(normalized_reasons),
+        frozen=True,
+    )
+
+
 def _clamp(value: Decimal, low: Decimal, high: Decimal) -> Decimal:
     return max(low, min(high, value))
 
