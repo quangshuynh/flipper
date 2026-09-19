@@ -19,10 +19,10 @@
   <p>Research active opportunities separately from sold comparable evidence. Asking prices are source facts, not resale estimates or sold prices.</p>
   <div class="card-actions"><a class="button" href="/deals/opportunities/new">Add Opportunity</a></div>
 </section>
-<nav class="listing-mode" aria-label="Listing status">
-  <span>Listing status</span>
+<nav class="listing-mode" aria-label="Research mode">
+  <span>Research mode</span>
   <a href="{{ active_mode_url }}" {% if listing_mode == listing_modes.ACTIVE %}aria-current="page"{% endif %}>Active listings</a>
-  <a href="{{ sold_mode_url }}" {% if listing_mode == listing_modes.SOLD %}aria-current="page"{% endif %}>Sold listings</a>
+  <a href="{{ sold_mode_url }}" {% if listing_mode == listing_modes.SOLD %}aria-current="page"{% endif %}>Sold comparables</a>
 </nav>
 {% if listing_mode == listing_modes.ACTIVE %}
 <form class="deal-search" method="get" action="/deals">
@@ -70,12 +70,15 @@
 {% endif %}
 {% else %}
 <section class="panel sold-research">
-  <p class="eyebrow">Sold comparable evidence</p>
-  <h2>Automatic marketplace-wide sold search is unavailable</h2>
+  <p class="eyebrow">Manual comparable research</p>
+  <h2>Marketplace-wide sold eBay search is not available with the configured supported APIs.</h2>
   <p>Flipper's supported eBay Browse access returns active, purchasable listings. Seller Trading and Fulfillment access covers only the connected seller's own activity, so Flipper does not present it as marketplace-wide sold evidence.</p>
-  <p>Choose an opportunity, then use <strong>Add sold comparable</strong> to record a sale you have verified. Preserve its observed price, currency, sold date when known, condition, reference, and source URL. An ended listing is not evidence of a sale.</p>
+  <h3>Add sold comparable</h3>
+  <div class="card-actions"><a class="button" href="{{ active_mode_url }}">Find an active listing to evaluate</a><a class="button secondary" href="/deals/opportunities/new">Add an opportunity found elsewhere</a></div>
+  <p>Start from <strong>Evaluate deal</strong> to open Deal analysis, then attach a sale you have verified through the existing comparable-evidence form. It records:</p>
+  <ul class="supported-fields"><li>sold price and currency</li><li>sold date, when known</li><li>condition</li><li>reference ID and title</li><li>HTTPS source URL</li><li>source identity, provenance, and notes</li></ul>
+  <p>Manually attached sold comparables can satisfy Deal Score's sold-evidence requirement when the remaining economics are complete. They do not change <code>deal-score-v1</code>. An ended listing is not evidence of a sale.</p>
   {% if q %}<p class="caution">No sold search was run for <strong>{{ q }}</strong>. Flipper did not fall back to active results.</p>{% endif %}
-  <div class="card-actions"><a class="button" href="{{ active_mode_url }}">Choose an active opportunity</a><a class="button secondary" href="/deals/opportunities/new">Add an opportunity</a></div>
 </section>
 {% endif %}
 {% if manual_opportunities %}
@@ -96,7 +99,7 @@
         <div class="evidence-strip"><strong>Needs resale estimate</strong><span>Record assumptions and sold evidence</span></div>
         {% endif %}
         {{ score_card(card_scores[key]) }}
-        <div class="card-actions"><a class="button" href="/deals/opportunities/{{ opportunity_id }}">{% if listing_mode == listing_modes.SOLD %}Add sold comparable{% else %}Evaluate deal{% endif %}</a></div>
+        <div class="card-actions"><a class="button" href="/deals/opportunities/{{ opportunity_id }}{% if listing_mode == listing_modes.SOLD %}#comparable-evidence{% endif %}">{% if listing_mode == listing_modes.SOLD %}Add sold comparable{% else %}Evaluate deal{% endif %}</a></div>
       </article>
     {% endfor %}
     </section>

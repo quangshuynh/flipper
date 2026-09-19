@@ -971,7 +971,9 @@ def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_pa
 
     assert landing.status_code == results.status_code == detail.status_code == 200
     assert 'name="listing_status" value="active"' in landing.text
-    assert "Active listings</a>" in landing.text and "Sold listings</a>" in landing.text
+    assert "Research mode" in landing.text
+    assert "Active listings</a>" in landing.text and "Sold comparables</a>" in landing.text
+    assert "Sold listings</a>" not in landing.text
     assert "Start with a deliberate search" in landing.text
     assert "Used mirrorless camera" in results.text
     assert "Needs resale estimate" in results.text
@@ -991,7 +993,7 @@ def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_pa
     assert "sold comparable evidence in the asking-price currency is unavailable" in analyzed.text
 
 
-def test_sold_listing_mode_is_honest_and_never_falls_back_to_active(monkeypatch, tmp_path):
+def test_sold_comparables_mode_is_manual_and_never_calls_ebay(monkeypatch, tmp_path):
     client, _ = _client(monkeypatch, tmp_path)
 
     def unexpected_discovery():
@@ -1012,12 +1014,42 @@ def test_sold_listing_mode_is_honest_and_never_falls_back_to_active(monkeypatch,
     assert 'href="/deals?' in response.text
     assert "listing_status=active" in response.text
     assert "q=camera" in response.text and "sort=price_desc" in response.text
-    assert "Automatic marketplace-wide sold search is unavailable" in response.text
+    assert "Marketplace-wide sold eBay search is not available" in response.text
+    assert "Add sold comparable" in response.text
+    assert "sold price and currency" in response.text
+    assert "sold date, when known" in response.text
+    assert "Deal Score's sold-evidence requirement" in response.text
     assert "No sold search was run" in response.text
     assert "did not fall back to active results" in response.text
     assert "eBay relevance" not in response.text
+    assert 'class="deal-grid"' not in response.text
     assert "Used mirrorless camera" not in response.text
     assert "ended listing is not evidence of a sale" in response.text
+
+
+def test_active_mode_still_searches_and_sorts_by_asking_price(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+
+    class MultipleResults(_Discovery):
+        def search(self, *args, **kwargs):
+            first = _discovery_item() | {
+                "itemId": "v1|expensive|0",
+                "title": "Expensive camera",
+                "price": {"value": "90", "currency": "USD"},
+            }
+            second = _discovery_item() | {
+                "itemId": "v1|affordable|0",
+                "title": "Affordable camera",
+                "price": {"value": "40", "currency": "USD"},
+            }
+            return {"itemSummaries": [first, second]}
+
+    monkeypatch.setattr(web_app, "_discovery", MultipleResults)
+    response = client.get("/deals?q=camera&sort=price_asc")
+
+    assert response.status_code == 200
+    assert "Active result sort" in response.text and "eBay relevance" in response.text
+    assert response.text.index("Affordable camera") < response.text.index("Expensive camera")
 
 
 def test_deal_acquisition_requires_actual_facts_and_uses_q_number(monkeypatch, tmp_path):
@@ -1240,6 +1272,7 @@ def test_manual_opportunity_evaluate_compare_comparable_and_acquire(monkeypatch,
     opportunity_id = path.rsplit("/", 1)[-1]
 
     detail = client.get(path)
+    sold_mode = client.get("/deals?listing_status=sold")
     analyzed = client.get(
         path,
         params={
@@ -1292,6 +1325,9 @@ def test_manual_opportunity_evaluate_compare_comparable_and_acquire(monkeypatch,
     assert created.status_code == added.status_code == missing.status_code == 303
     assert "User-provided source fact" in detail.text
     assert "Needs assumptions" in detail.text
+    assert "Opportunities that can receive sold evidence" in sold_mode.text
+    assert f'href="{path}#comparable-evidence">Add sold comparable</a>' in sold_mode.text
+    assert "Deal Score's sold-evidence requirement" in detail.text
     assert "USD 50.00" in analyzed.text
     assert "Estate Sale" in compared.text and "eBay" in compared.text
     assert "24 miles" in compared.text and "USD 6.00" in compared.text
