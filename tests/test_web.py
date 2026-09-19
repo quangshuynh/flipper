@@ -355,6 +355,28 @@ def test_populated_dashboard_inventory_and_details(monkeypatch, tmp_path):
     assert 'href="/insights"' in dashboard.text
 
 
+def test_inventory_page_does_not_load_sale_only_reporting_data(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    store.add(
+        title="Inventory only",
+        source="test",
+        acquired_at="2026-09-19",
+        acquisition_cost="10.00",
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("inventory page loaded sale-only reporting data")
+
+    monkeypatch.setattr(InventoryStore, "list_all_sale_costs", forbidden)
+    monkeypatch.setattr(InventoryStore, "list_reconciliation_confirmations", forbidden)
+    monkeypatch.setattr(InventoryStore, "list_sourcing_travel", forbidden)
+
+    response = client.get("/inventory")
+
+    assert response.status_code == 200
+    assert "Inventory only" in response.text
+
+
 def test_inventory_actual_sourcing_travel_web_flow_and_origin(monkeypatch, tmp_path):
     client, store = _client(monkeypatch, tmp_path)
     item = store.add(
@@ -991,6 +1013,25 @@ def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_pa
     assert "USD 2.86" in analyzed.text and "USD 5.00/day" in analyzed.text
     assert "sold comparables" in analyzed.text
     assert "sold comparable evidence in the asking-price currency is unavailable" in analyzed.text
+
+
+def test_deal_detail_loads_comparable_rows_once(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(web_app, "_discovery", _Discovery)
+    calls = 0
+    original_list = web_app.research_store.list
+
+    def counted_list(session_id, opportunity_key):
+        nonlocal calls
+        calls += 1
+        return original_list(session_id, opportunity_key)
+
+    monkeypatch.setattr(web_app.research_store, "list", counted_list)
+
+    response = client.get("/deals/ebay/v1%7C123%7C0")
+
+    assert response.status_code == 200
+    assert calls == 1
 
 
 def test_sold_comparables_mode_is_manual_and_never_calls_ebay(monkeypatch, tmp_path):

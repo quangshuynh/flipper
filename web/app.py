@@ -26,6 +26,7 @@ from deals.categories import DealCategory, normalize_category
 from deals.comparables import (
     Comparable,
     ComparableCondition,
+    ComparableEvidenceSet,
     ComparableType,
 )
 from deals.ebay import EBAY_CATEGORY_MAP, normalize_ebay_item, normalize_search_results
@@ -94,7 +95,7 @@ RESEARCH_COOKIE = "flipper_research"
 
 def _store() -> InventoryStore:
     path = Path(os.getenv("FLIPPER_INVENTORY_DB", str(DEFAULT_DATABASE)))
-    store = InventoryStore(path)
+    store = InventoryStore(path, reuse_schema_check=True)
     store.initialize()
     return store
 
@@ -163,6 +164,17 @@ def _load_reports(store: InventoryStore):
         store.list_sourcing_travel(),
     )
     return inventory_view, sales_view
+
+
+def _load_sales_report(store: InventoryStore):
+    """Load only the records rendered by sale-oriented pages."""
+    return sales_report(
+        store.list(),
+        store.list_sales(),
+        store.list_all_sale_costs(),
+        store.list_reconciliation_confirmations(),
+        store.list_sourcing_travel(),
+    )
 
 
 def _live_listing_results(store: InventoryStore):
@@ -388,7 +400,9 @@ def _render_deal_detail(
     trip_relevant,
     status_code=200,
 ):
-    evidence = research_store.evidence_set(_research_session(request), key, as_of=_today())
+    session_id = _research_session(request)
+    research_rows = research_store.list(session_id, key)
+    evidence = ComparableEvidenceSet(tuple(row.comparable for row in research_rows), as_of=_today())
     deal_score = calculate_deal_score(
         asking_price=opportunity.base_price,
         economics=evaluation.economics,
@@ -414,7 +428,7 @@ def _render_deal_detail(
         ),
         trip=trip,
         trip_relevant=trip_relevant,
-        research_rows=research_store.list(_research_session(request), key),
+        research_rows=research_rows,
         evidence=evidence,
         deal_score=deal_score,
         comparable_types=ComparableType,
@@ -551,7 +565,7 @@ def inventory_page(
     linkage: str = "",
 ):
     store = _store()
-    report, _ = _load_reports(store)
+    report = inventory_report(store.list(), store.list_sales(), today=_today())
     rows = list(report.rows)
     if status:
         rows = [row for row in rows if row.record.status == status]
@@ -627,6 +641,7 @@ def inventory_detail(request: Request, inventory_id: str, edit_notes: bool = Fal
             store.list_reconciliation_confirmations(),
         )
         sale_row = sales.rows[0]
+    valuation = store.baseline_valuation(record.inventory_id)
     return _render(
         request,
         "inventory_detail.html",
@@ -635,22 +650,22 @@ def inventory_detail(request: Request, inventory_id: str, edit_notes: bool = Fal
         row=row,
         edit_notes=edit_notes,
         sale_row=sale_row,
-        valuation=store.baseline_valuation(record.inventory_id),
-        valuation_comparison=next(
-            (
-                result
-                for result in valuation_accuracy_report(store).rows
-                if result.inventory.internal_id == record.internal_id
-            ),
-            None,
+        valuation=valuation,
+        valuation_comparison=(
+            next(
+                (
+                    result
+                    for result in valuation_accuracy_report(store).rows
+                    if result.inventory.internal_id == record.internal_id
+                ),
+                None,
+            )
+            if valuation is not None
+            else None
         ),
         attachments=_attachments(store).list(record.inventory_id),
         sourcing_travel=store.get_sourcing_travel(record.inventory_id),
-        linked_snapshots=[
-            snapshot
-            for snapshot in store.list_research_snapshots()
-            if snapshot.inventory_id == record.inventory_id
-        ],
+        linked_snapshots=store.list_research_snapshots(record.inventory_id),
     )
 
 
@@ -700,7 +715,7 @@ def inventory_attachment(inventory_id: str, attachment_id: str):
 
 @app.get("/sales", response_class=HTMLResponse)
 def sales_page(request: Request, state: str = ""):
-    _, report = _load_reports(_store())
+    report = _load_sales_report(_store())
     rows = list(reversed(report.rows))
     if state:
         rows = [row for row in rows if row.reconciliation_state == state]
@@ -736,13 +751,18 @@ def sale_detail(
         store.list_reconciliation_confirmations(),
         store.list_sourcing_travel(),
     )
-    valuation_row = next(
-        (
-            result
-            for result in valuation_accuracy_report(store).rows
-            if result.inventory.internal_id == item.internal_id
-        ),
-        None,
+    baseline = store.baseline_valuation(item.inventory_id)
+    valuation_row = (
+        next(
+            (
+                result
+                for result in valuation_accuracy_report(store).rows
+                if result.inventory.internal_id == item.internal_id
+            ),
+            None,
+        )
+        if baseline is not None
+        else None
     )
     return _render(
         request,
@@ -755,11 +775,7 @@ def sale_detail(
         costs=costs,
         edit_accounting=edit_accounting,
         valuation_row=valuation_row,
-        linked_snapshots=[
-            snapshot
-            for snapshot in store.list_research_snapshots()
-            if snapshot.inventory_id == item.inventory_id
-        ],
+        linked_snapshots=store.list_research_snapshots(item.inventory_id),
     )
 
 
