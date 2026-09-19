@@ -18,4 +18,9 @@ It is not final merely because rows exist. Fees, shipping, refunds, and adjustme
 explicit confirmation; the sale is incomplete, partially reconciled, or fully reconciled based on
 those confirmations. Payout-to-bank reconciliation and complete accounting remain out of scope.
 
+While accounting is incomplete, web views label calculated recorded profit and margin as
+**provisional** and keep final realized profit and ROI unavailable. A displayed zero acquisition
+cost is a known recorded fact; absent fee, shipping, refund, or adjustment confirmations remain
+unknown and are not claims that those costs were zero.
+
 Use `python main.py sales --help` and `python main.py ebay import-finances --help` for commands.
