@@ -13,6 +13,14 @@ Flipper supports two types with separate summaries:
 - **Active asking comparable** records a current asking price. It is never treated as a realized
   sale.
 
+The Deals page mirrors that distinction with separate **Active listings** and **Sold comparables**
+research modes. Active mode searches the official eBay Browse API and labels returned money as an
+asking price. Sold comparables mode is a manual evidence workflow, not a sold-listing search: the
+eBay access available to Flipper does not provide marketplace-wide completed-sale search. It directs
+the user to evaluate an opportunity and deliberately attach a sold comparable. Switching modes
+preserves applicable active search fields, but Sold comparables exposes no fake result sort, result
+grid, or fallback active results.
+
 Disappearing listings, inaccessible URLs, and active offers are not inferred to be sold. Completed
 unsold, auction-result, dealer-specific, and user-estimate types are deferred until their semantics
 and source requirements are clear.

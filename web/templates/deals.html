@@ -16,16 +16,23 @@
 <section class="deals-intro panel">
   <p class="eyebrow">Multi-source opportunity workspace</p>
   <h2>Find opportunities. Supply the assumptions. Keep the evidence honest.</h2>
-  <p>Search live eBay listings or add an opportunity found anywhere. Asking prices are source facts, not resale estimates or sold comparables.</p>
+  <p>Research active opportunities separately from sold comparable evidence. Asking prices are source facts, not resale estimates or sold prices.</p>
   <div class="card-actions"><a class="button" href="/deals/opportunities/new">Add Opportunity</a></div>
 </section>
+<nav class="listing-mode" aria-label="Research mode">
+  <span>Research mode</span>
+  <a href="{{ active_mode_url }}" {% if listing_mode == listing_modes.ACTIVE %}aria-current="page"{% endif %}>Active listings</a>
+  <a href="{{ sold_mode_url }}" {% if listing_mode == listing_modes.SOLD %}aria-current="page"{% endif %}>Sold comparables</a>
+</nav>
+{% if listing_mode == listing_modes.ACTIVE %}
 <form class="deal-search" method="get" action="/deals">
+  <input type="hidden" name="listing_status" value="active">
   <label class="search-wide">Keywords<input name="q" value="{{ q }}" required maxlength="100" placeholder="camera, graphics card, vintage watch"></label>
   <label>Category<select name="category"><option value="">All</option>{% for item in categories %}<option value="{{ item.slug }}" {% if category == item.slug %}selected{% endif %}>{{ item.label }}</option>{% endfor %}</select></label>
   <label>Minimum price<input name="minimum_price" value="{{ minimum_price }}" inputmode="decimal"></label>
   <label>Maximum price<input name="maximum_price" value="{{ maximum_price }}" inputmode="decimal"></label>
   <label>Condition<select name="condition"><option value="">Any</option>{% for value in ['NEW','USED','CERTIFIED_REFURBISHED'] %}<option value="{{ value }}" {% if condition == value %}selected{% endif %}>{{ value|replace('_', ' ')|title }}</option>{% endfor %}</select></label>
-  <label>Sort<select name="sort"><option value="relevance">eBay relevance</option><option value="price_asc" {% if sort == 'price_asc' %}selected{% endif %}>Price low to high</option><option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>Price high to low</option></select></label>
+  <label>Active result sort<select name="sort"><option value="relevance">eBay relevance</option><option value="price_asc" {% if sort == 'price_asc' %}selected{% endif %}>Price low to high</option><option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>Price high to low</option></select></label>
   <button type="submit">Search eBay</button>
 </form>
 {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
@@ -61,15 +68,28 @@
 {% elif not searched %}
 <section class="panel empty"><h2>Start with a deliberate search</h2><p>Search eBay or add an opportunity. Flipper contacts eBay only when you submit the search.</p></section>
 {% endif %}
+{% else %}
+<section class="panel sold-research">
+  <p class="eyebrow">Manual comparable research</p>
+  <h2>Marketplace-wide sold eBay search is not available with the configured supported APIs.</h2>
+  <p>Flipper's supported eBay Browse access returns active, purchasable listings. Seller Trading and Fulfillment access covers only the connected seller's own activity, so Flipper does not present it as marketplace-wide sold evidence.</p>
+  <h3>Add sold comparable</h3>
+  <div class="card-actions"><a class="button" href="{{ active_mode_url }}">Find an active listing to evaluate</a><a class="button secondary" href="/deals/opportunities/new">Add an opportunity found elsewhere</a></div>
+  <p>Start from <strong>Evaluate deal</strong> to open Deal analysis, then attach a sale you have verified through the existing comparable-evidence form. It records:</p>
+  <ul class="supported-fields"><li>sold price and currency</li><li>sold date, when known</li><li>condition</li><li>reference ID and title</li><li>HTTPS source URL</li><li>source identity, provenance, and notes</li></ul>
+  <p>Manually attached sold comparables can satisfy Deal Score's sold-evidence requirement when the remaining economics are complete. They do not change <code>deal-score-v1</code>. An ended listing is not evidence of a sale.</p>
+  {% if q %}<p class="caution">No sold search was run for <strong>{{ q }}</strong>. Flipper did not fall back to active results.</p>{% endif %}
+</section>
+{% endif %}
 {% if manual_opportunities %}
 <section class="panel">
-  <div class="result-head"><strong>Your temporary opportunities</strong><span>Cleared when the server restarts</span></div>
+  <div class="result-head"><strong>{% if listing_mode == listing_modes.SOLD %}Opportunities that can receive sold evidence{% else %}Your temporary opportunities{% endif %}</strong><span>Cleared when the server restarts</span></div>
   <form method="get" action="/deals/compare">
     <section class="deal-grid">
     {% for opportunity_id, stored in manual_opportunities %}
       {% set key = 'manual:' ~ opportunity_id %}
       <article class="deal-card">
-        <label class="compare-select"><input type="checkbox" name="opportunity_key" value="{{ key }}"> Add to comparison</label>
+        {% if listing_mode == listing_modes.ACTIVE %}<label class="compare-select"><input type="checkbox" name="opportunity_key" value="{{ key }}"> Add to comparison</label>{% endif %}
         <div class="deal-card-head"><span class="badge matched">{{ stored.opportunity.source.value|replace('-', ' ')|title }}</span><span>User-provided</span></div>
         <h2><a href="/deals/opportunities/{{ opportunity_id }}">{{ stored.opportunity.title }}</a></h2>
         <p>{{ stored.opportunity.base_price.amount|money(stored.opportunity.base_price.currency) }} · {{ stored.opportunity.category.label }}</p>
@@ -79,11 +99,11 @@
         <div class="evidence-strip"><strong>Needs resale estimate</strong><span>Record assumptions and sold evidence</span></div>
         {% endif %}
         {{ score_card(card_scores[key]) }}
-        <div class="card-actions"><a class="button" href="/deals/opportunities/{{ opportunity_id }}">Evaluate deal</a></div>
+        <div class="card-actions"><a class="button" href="/deals/opportunities/{{ opportunity_id }}{% if listing_mode == listing_modes.SOLD %}#comparable-evidence{% endif %}">{% if listing_mode == listing_modes.SOLD %}Add sold comparable{% else %}Evaluate deal{% endif %}</a></div>
       </article>
     {% endfor %}
     </section>
-    <button type="submit">Compare selected</button>
+    {% if listing_mode == listing_modes.ACTIVE %}<button type="submit">Compare selected</button>{% endif %}
   </form>
 </section>
 {% endif %}

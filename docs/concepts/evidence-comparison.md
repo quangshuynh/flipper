@@ -50,6 +50,10 @@ As reviewed in September 2026:
 
 No realistically available official sold-data source currently passes the implementation gate.
 Sold counts, sell-through, historical median prices, and market time-to-sale remain unavailable.
+The Deals **Sold comparables** mode therefore states this limitation and performs no marketplace call.
+`GetMyeBaySelling` sold rows and Sell Fulfillment orders are scoped to the authenticated seller;
+they are not substituted for marketplace-wide comparable search. A listing ending, disappearing,
+or moving to an unsold list does not establish that it sold or reveal realized proceeds.
 
 Flipper's inventory, valuations, lifecycle timestamps, sales, and reconciled costs are promising
 future evidence. Later work needs comparable attributes, complete lifecycle windows, sample-size

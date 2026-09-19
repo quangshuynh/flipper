@@ -31,6 +31,7 @@ from deals.comparables import (
 from deals.ebay import EBAY_CATEGORY_MAP, normalize_ebay_item, normalize_search_results
 from deals.economics import calculate_economics
 from deals.manual import MANUAL_CONDITIONS, create_manual_opportunity
+from deals.listing_state import ListingResearchMode
 from deals.outcomes import build_decision_outcome
 from deals.evaluation import ComparisonResult, DealEvaluation, compare
 from deals.models import (
@@ -869,8 +870,10 @@ def deals_page(
     maximum_price: str = "",
     condition: str = "",
     sort: str = "relevance",
+    listing_status: str = "active",
     page: int = 1,
 ):
+    listing_mode = ListingResearchMode.from_query(listing_status)
     results = []
     error = None
     page = max(1, min(page, 100))
@@ -880,7 +883,7 @@ def deals_page(
             selected_category = normalize_category(category)
         except ValueError:
             error = "Choose a recognized Flipper category."
-    if q and error is None:
+    if q and error is None and listing_mode is ListingResearchMode.ACTIVE:
         try:
             client = _discovery()
             body = client.search(
@@ -903,9 +906,12 @@ def deals_page(
             )
         except (EbayDiscoveryError, ValueError) as exc:
             error = _safe_discovery_error(exc)
-    if sort in {"price_asc", "price_desc"}:
-        results.sort(key=lambda row: row[0].base_price.amount, reverse=sort.endswith("desc"))
-    else:
+    if listing_mode is ListingResearchMode.ACTIVE:
+        if sort in {"price_asc", "price_desc"}:
+            results.sort(key=lambda row: row[0].base_price.amount, reverse=sort.endswith("desc"))
+        else:
+            sort = "relevance"
+    elif sort not in {"relevance", "price_asc", "price_desc"}:
         sort = "relevance"
     manual_opportunities = research_store.list_opportunities(_research_session(request))
     card_inputs = [
@@ -933,6 +939,16 @@ def deals_page(
                 )
             )
         card_scores[key] = presentation
+    preserved = {
+        "q": q,
+        "category": category,
+        "minimum_price": minimum_price,
+        "maximum_price": maximum_price,
+        "condition": condition,
+        "sort": sort,
+        "page": page,
+    }
+    preserved = {key: value for key, value in preserved.items() if value not in {"", 1}}
     return _render(
         request,
         "deals.html",
@@ -940,7 +956,11 @@ def deals_page(
         title="Deals",
         results=results,
         error=error,
-        searched=bool(q),
+        searched=bool(q) and listing_mode is ListingResearchMode.ACTIVE,
+        listing_mode=listing_mode,
+        listing_modes=ListingResearchMode,
+        active_mode_url=f"/deals?{urlencode(preserved | {'listing_status': 'active'})}",
+        sold_mode_url=f"/deals?{urlencode(preserved | {'listing_status': 'sold'})}",
         categories=DealCategory,
         q=q,
         category=category,
