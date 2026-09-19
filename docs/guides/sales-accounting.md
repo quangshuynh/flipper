@@ -2,6 +2,8 @@
 
 Imported sales retain minimized identity, exact scaled gross money, currency, quantity, and sale
 time. They exclude buyer PII. Exact re-import is a no-op; changed immutable data is a conflict.
+The Sales page contains authoritative local sales only; unreconciled eBay orders appear in the
+linked eBay Sales review until the user explicitly imports a uniquely matched order line.
 
 Sale cost components include marketplace fees, seller-paid shipping, refunds, other reductions,
 and supported credits/reversals. Manual components remain distinct from eBay Finances imports.

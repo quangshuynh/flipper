@@ -9,7 +9,8 @@ arguments. The main areas are:
 | `inventory` | Inspect and maintain local items, lifecycle, valuations, and attachments |
 | `sales` | Inspect sales, costs, and reconciliation confirmations |
 | `reports` | Summary, inventory, and sales reports |
-| `ebay` | Seller OAuth, read-only retrieval/reconciliation, and explicit local imports |
+| `ebay` | Seller OAuth, read-only listing/order/Finances retrieval, reconciliation, and explicit local imports |
 
 Commands use the local SQLite database selected by their documented option/environment default.
-Always inspect `--help` before a mutation; the web application does not replace the full CLI.
+Always inspect `--help` before a mutation. The web application supports active-listing sync and
+reviewed sale import; Finances import and advanced sale accounting remain CLI workflows.

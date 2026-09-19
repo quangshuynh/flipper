@@ -1313,7 +1313,7 @@ class InventoryStore:
         currency: str,
         sold_at: datetime,
     ) -> tuple[SaleRecord, bool]:
-        """Atomically insert one sale and apply the listed-to-sold lifecycle transition."""
+        """Atomically insert one sale and apply its authoritative sold lifecycle state."""
         marketplace = self._required(marketplace, "marketplace")
         external_order_id = self._required(external_order_id, "external order ID")
         external_line_item_id = self._required(external_line_item_id, "external line item ID")
@@ -1398,10 +1398,19 @@ class InventoryStore:
                     imported_timestamp,
                 ),
             )
-            try:
-                self._transition_row(connection, item, "sold", event_timestamp=sold_timestamp)
-            except InventoryValidationError as exc:
-                raise SaleImportError(str(exc)) from exc
+            if item["status"] == "acquired":
+                # A completed marketplace order can be the first durable evidence that an
+                # acquired item was listed. Preserve listed_at as unknown rather than
+                # inventing a listing timestamp.
+                connection.execute(
+                    "UPDATE inventory_items SET status = 'sold', sold_at = ? WHERE internal_id = ?",
+                    (sold_timestamp, item["internal_id"]),
+                )
+            else:
+                try:
+                    self._transition_row(connection, item, "sold", event_timestamp=sold_timestamp)
+                except InventoryValidationError as exc:
+                    raise SaleImportError(str(exc)) from exc
             connection.execute(
                 "UPDATE sale_id_sequence SET last_value = ? WHERE singleton = 1", (next_value,)
             )

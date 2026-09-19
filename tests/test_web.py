@@ -7,7 +7,7 @@ from keyring.errors import KeyringError
 from inventory.store import InventoryStore
 from inventory.attachments import AttachmentService
 from ebay.listings import EbayActiveListing
-from ebay.orders import Money
+from ebay.orders import EbayOrder, EbayOrderLineItem, Money, OrderPricingSummary
 import web.app as web_app
 from web.app import app
 
@@ -43,6 +43,43 @@ def _sold(store, number, *, gross="100.00", currency="USD"):
     return item, sale
 
 
+def _ebay_order(*lines, order_id="order-1"):
+    return EbayOrder(
+        order_id=order_id,
+        creation_date=datetime(2026, 9, 19, 1, tzinfo=timezone.utc),
+        last_modified_date=None,
+        fulfillment_status="FULFILLED",
+        payment_status="PAID",
+        cancellation_status="NONE_REQUESTED",
+        line_items=tuple(lines),
+        pricing=OrderPricingSummary(
+            tax=Money(Decimal("8.07"), "USD"),
+            total=Money(Decimal("83.07"), "USD"),
+        ),
+    )
+
+
+def _order_line(line_id="line-1", sku="Q0001", amount="75.00"):
+    return EbayOrderLineItem(
+        line_item_id=line_id,
+        legacy_item_id="item-1",
+        title="Olympus recorder",
+        sku=sku,
+        quantity=1,
+        line_item_cost=Money(Decimal(amount), "USD") if amount is not None else None,
+    )
+
+
+def _mock_live_orders(monkeypatch, orders):
+    monkeypatch.setattr(web_app.SellerOAuthConfig, "from_environment", lambda: object())
+    monkeypatch.setattr(web_app, "SellerOAuthClient", lambda config: object())
+    monkeypatch.setattr(
+        web_app,
+        "FulfillmentClient",
+        lambda oauth: type("C", (), {"get_orders": lambda self, start, end: orders})(),
+    )
+
+
 def test_live_ebay_listings_page_is_isolated_and_renders_state(monkeypatch, tmp_path):
     client, store = _client(monkeypatch, tmp_path)
     store.add(
@@ -73,6 +110,117 @@ def test_live_ebay_listings_page_is_isolated_and_renders_state(monkeypatch, tmp_
     assert "Recorder" in response.text
     assert "MATCHED" in response.text
     assert "buyer" not in response.text.lower()
+
+
+def test_ebay_sales_review_discovers_exact_match_without_mutating_local_state(
+    monkeypatch, tmp_path
+):
+    client, store = _client(monkeypatch, tmp_path)
+    item = store.add(
+        title="Olympus recorder",
+        source="gift",
+        acquired_at="2026-09-01",
+        acquisition_cost="0",
+        marketplace="eBay",
+        marketplace_sku="Q0001",
+    )
+    store.transition_status(item.inventory_id, "listed")
+    _mock_live_orders(
+        monkeypatch,
+        [_ebay_order(_order_line(), _order_line("line-2", None), _order_line("line-3", "Q9999"))],
+    )
+
+    response = client.get("/ebay/orders")
+
+    assert response.status_code == 200
+    assert "Olympus recorder" in response.text
+    assert "USD 75.00" in response.text
+    assert "USD 83.07" in response.text
+    assert "Includes USD 8.07 reported tax" in response.text
+    assert "matched" in response.text
+    assert "missing sku" in response.text
+    assert "unmatched" in response.text
+    assert response.text.count("Import matched sale") == 1
+    assert store.get("Q0001").status == "listed"
+    assert store.list_sales() == []
+
+
+def test_explicit_ebay_sale_import_is_idempotent_and_starts_incomplete(monkeypatch, tmp_path):
+    client, store = _client(monkeypatch, tmp_path)
+    item = store.add(
+        title="Olympus recorder",
+        source="gift",
+        acquired_at="2026-09-01",
+        acquisition_cost="0",
+        marketplace="eBay",
+        marketplace_sku="Q0001",
+    )
+    assert item.status == "acquired"
+    _mock_live_orders(monkeypatch, [_ebay_order(_order_line())])
+    data = {"order_id": "order-1", "line_item_id": "line-1"}
+
+    rejected = client.post(
+        "/ebay/orders/import",
+        data=data,
+        headers={"Origin": "https://evil.example"},
+        follow_redirects=False,
+    )
+    first = client.post("/ebay/orders/import", data=data, follow_redirects=False)
+    second = client.post("/ebay/orders/import", data=data, follow_redirects=False)
+
+    assert rejected.status_code == 403
+    assert first.status_code == second.status_code == 303
+    assert first.headers["location"].startswith("/sales/S000001")
+    assert "already+imported" in second.headers["location"]
+    assert len(store.list_sales()) == 1
+    sale = store.list_sales()[0]
+    assert sale.gross_amount == Decimal("75.00")
+    assert store.get("Q0001").status == "sold"
+    assert store.list_sale_costs(sale.sale_id) == []
+    assert store.reconciliation_status(sale.sale_id)[0] == "incomplete"
+
+
+def test_ebay_order_failure_and_stale_selection_leave_authoritative_state_unchanged(
+    monkeypatch, tmp_path
+):
+    client, store = _client(monkeypatch, tmp_path)
+    item = store.add(
+        title="Recorder",
+        source="gift",
+        acquired_at="2026-09-01",
+        acquisition_cost="0",
+        marketplace="eBay",
+        marketplace_sku="Q0001",
+    )
+    store.transition_status(item.inventory_id, "listed")
+    _mock_live_orders(monkeypatch, [])
+
+    stale = client.post(
+        "/ebay/orders/import",
+        data={"order_id": "gone", "line_item_id": "gone"},
+        follow_redirects=False,
+    )
+
+    assert stale.status_code == 303
+    assert "no+longer+available" in stale.headers["location"]
+    assert store.get("Q0001").status == "listed"
+    assert store.list_sales() == []
+
+    monkeypatch.setattr(
+        web_app,
+        "_live_order_review",
+        lambda store: (_ for _ in ()).throw(web_app.FulfillmentApiError("secret raw payload")),
+    )
+    failed = client.post(
+        "/ebay/orders/import",
+        data={"order_id": "order-1", "line_item_id": "line-1"},
+        follow_redirects=False,
+    )
+    assert failed.status_code == 303
+    assert "temporarily+unavailable" in failed.headers["location"]
+    assert "secret" not in failed.headers["location"]
+    assert store.get("Q0001").status == "listed"
+    assert store.list_sales() == []
 
 
 def test_web_application_starts_and_empty_states(monkeypatch, tmp_path):

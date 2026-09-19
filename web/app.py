@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections import defaultdict
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -51,6 +52,9 @@ from ebay.discovery import DiscoveryConfig, EbayDiscoveryClient, EbayDiscoveryEr
 from ebay.active_listings import ActiveListingsApiError, ActiveListingsClient
 from ebay.listing_reconciliation import summarize as summarize_listings
 from ebay.listing_workflow import import_listing, reconcile_listings, sync_listings
+from ebay.fulfillment import FulfillmentApiError, FulfillmentClient
+from ebay.reconciliation import reconcile_ebay_orders
+from ebay.sale_import import SaleImportStatus, import_ebay_sales
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from inventory.attachments import AttachmentService
 from inventory.store import (
@@ -158,6 +162,17 @@ def _live_listing_results(store: InventoryStore):
     oauth = SellerOAuthClient(SellerOAuthConfig.from_environment())
     listings = ActiveListingsClient(oauth).get_active_listings()
     return reconcile_listings(store, listings)
+
+
+def _live_order_review(store: InventoryStore):
+    """Fetch a bounded recent window and pair every line with local reconciliation."""
+    end = datetime.now(timezone.utc) - timedelta(minutes=5)
+    start = end - timedelta(days=30)
+    oauth = SellerOAuthClient(SellerOAuthConfig.from_environment())
+    orders = FulfillmentClient(oauth).get_orders(start, end)
+    matches = reconcile_ebay_orders(orders, store.list())
+    order_by_id = {order.order_id: order for order in orders}
+    return [{"order": order_by_id[result.order_id], "match": result} for result in matches]
 
 
 def _discovery() -> EbayDiscoveryClient:
@@ -685,7 +700,7 @@ def sales_page(request: Request, state: str = ""):
 
 
 @app.get("/sales/{sale_id}", response_class=HTMLResponse)
-def sale_detail(request: Request, sale_id: str):
+def sale_detail(request: Request, sale_id: str, message: str = "", error_message: str = ""):
     store = _store()
     try:
         sale = store.get_sale(sale_id)
@@ -713,6 +728,8 @@ def sale_detail(request: Request, sale_id: str):
         "sale_detail.html",
         section="sales",
         title=sale.sale_id,
+        message=message,
+        error_message=error_message,
         row=report.rows[0],
         costs=costs,
         valuation_row=valuation_row,
@@ -1398,6 +1415,75 @@ def ebay_listings_page(request: Request, message: str = "", error_message: str =
         error=None,
         message=message,
         error_message=error_message,
+    )
+
+
+@app.get("/ebay/orders", response_class=HTMLResponse)
+def ebay_orders_page(request: Request, message: str = "", error_message: str = ""):
+    """Review transient recent order lines before an explicit local sale import."""
+    try:
+        rows = _live_order_review(_store())
+    except (SellerOAuthError, FulfillmentApiError) as exc:
+        return _render(
+            request,
+            "ebay_orders.html",
+            section="ebay",
+            title="eBay Sales",
+            rows=(),
+            error=_safe_ebay_error(exc),
+            status_code=503,
+        )
+    return _render(
+        request,
+        "ebay_orders.html",
+        section="ebay",
+        title="eBay Sales",
+        rows=rows,
+        error=None,
+        message=message,
+        error_message=error_message,
+    )
+
+
+@app.post("/ebay/orders/import")
+async def ebay_order_import(request: Request):
+    """Re-fetch and explicitly import one selected external order line."""
+    fields = await _post_fields(request)
+    order_id = fields.get("order_id", "")
+    line_item_id = fields.get("line_item_id", "")
+    if not order_id or not line_item_id:
+        return _redirect("/ebay/orders", error_message="Order and line identity are required.")
+    store = _store()
+    try:
+        rows = _live_order_review(store)
+    except (SellerOAuthError, FulfillmentApiError) as exc:
+        return _redirect("/ebay/orders", error_message=_safe_ebay_error(exc))
+    selected = [
+        row
+        for row in rows
+        if row["order"].order_id == order_id and row["match"].line_item.line_item_id == line_item_id
+    ]
+    if len(selected) != 1:
+        return _redirect(
+            "/ebay/orders",
+            error_message="The selected eBay order line is no longer available for review.",
+        )
+    order = selected[0]["order"]
+    line = selected[0]["match"].line_item
+    selected_order = replace(order, line_items=(line,))
+    result = import_ebay_sales([selected_order], store)[0]
+    if result.status in {SaleImportStatus.IMPORTED, SaleImportStatus.ALREADY_IMPORTED}:
+        assert result.sale is not None
+        message = (
+            "eBay sale imported. Review fees, shipping, refunds, and adjustments."
+            if result.status is SaleImportStatus.IMPORTED
+            else "This eBay sale was already imported; no duplicate was created."
+        )
+        return _redirect(f"/sales/{result.sale.sale_id}", message=message)
+    detail = f": {result.detail}" if result.detail else ""
+    return _redirect(
+        "/ebay/orders",
+        error_message=(f"Sale was not imported ({result.status.value.replace('_', ' ')}){detail}."),
     )
 
 

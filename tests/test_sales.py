@@ -68,6 +68,29 @@ def test_matched_line_imports_exact_money_currency_and_transitions_inventory(tmp
     assert (sold.status, sold.sold_at) == ("sold", result.sale.sold_at)
 
 
+def test_matched_sale_imports_from_acquired_without_inventing_listing_timestamp(tmp_path):
+    store = InventoryStore(tmp_path / "inventory.db", clock=lambda: IMPORTED_AT)
+    item = store.add(
+        title="Item Q0001",
+        source="gift",
+        acquired_at="2026-09-01",
+        acquisition_cost="0",
+        marketplace="eBay",
+        marketplace_sku="Q0001",
+    )
+
+    result = import_ebay_sales([order(line(amount="75.00"))], store)[0]
+
+    assert item.status == "acquired"
+    assert result.status is SaleImportStatus.IMPORTED
+    sold = store.get("Q0001")
+    assert sold.status == "sold"
+    assert sold.listed_at is None
+    assert sold.sold_at == "2026-09-15T12:34:56Z"
+    assert result.sale is not None
+    assert result.sale.gross_amount == Decimal("75.00")
+
+
 def test_repeat_import_is_idempotent_and_conflicting_economics_are_explicit(tmp_path):
     store = InventoryStore(tmp_path / "inventory.db")
     inventory(store)
@@ -184,10 +207,11 @@ def test_incompatible_lifecycle_is_not_forced(tmp_path):
         marketplace="eBay",
         marketplace_sku="Q0001",
     )
+    item = store.transition_status(item.inventory_id, "archived")
     result = import_ebay_sales([order(line())], store)[0]
-    assert item.status == "acquired"
+    assert item.status == "archived"
     assert result.status is SaleImportStatus.INCOMPATIBLE_INVENTORY
-    assert store.get("Q0001").status == "acquired"
+    assert store.get("Q0001").status == "archived"
     assert store.list_sales() == []
 
 
