@@ -402,6 +402,7 @@ def test_sales_states_components_missing_categories_and_analytics(monkeypatch, t
 
     listing = client.get("/sales")
     detail = client.get(f"/sales/{incomplete.sale_id}")
+    complete_detail = client.get(f"/sales/{complete.sale_id}")
     analytics = client.get("/analytics")
 
     assert "incomplete" in listing.text
@@ -410,8 +411,65 @@ def test_sales_states_components_missing_categories_and_analytics(monkeypatch, t
     assert "fees, shipping, refunds, adjustments" in detail.text
     assert "manual" in detail.text
     assert "label" in detail.text
+    assert "Accounting incomplete" in detail.text
+    assert "Recorded profit (provisional)" in detail.text
+    assert "Recorded margin (provisional)" in detail.text
+    assert "Final realized profit, margin, and ROI are unavailable" in detail.text
+    assert "Realized profit" in complete_detail.text
+    assert "Realized margin" in complete_detail.text
+    assert "Recorded profit (provisional)" not in complete_detail.text
     assert "2026-09" in analytics.text
     assert "USD 150.00" in analytics.text
+
+
+def test_zero_cost_incomplete_sale_is_visibly_provisional_without_changing_math(
+    monkeypatch, tmp_path
+):
+    client, store = _client(monkeypatch, tmp_path)
+    item = store.add(
+        title="Olympus recorder",
+        source="gift",
+        acquired_at="2026-09-01",
+        acquisition_cost="0",
+        marketplace="eBay",
+        marketplace_sku="Q0001",
+    )
+    sale, _ = store.import_sale(
+        inventory_id=item.inventory_id,
+        marketplace="eBay",
+        external_order_id="order-1",
+        external_line_item_id="line-1",
+        marketplace_sku="Q0001",
+        quantity=1,
+        gross_amount=Decimal("75.00"),
+        currency="USD",
+        sold_at=datetime(2026, 9, 19, tzinfo=timezone.utc),
+    )
+
+    detail = client.get(f"/sales/{sale.sale_id}")
+    listing = client.get("/sales")
+    inventory = client.get(f"/inventory/{item.inventory_id}")
+    dashboard = client.get("/")
+
+    assert sale.gross_amount == Decimal("75.00")
+    assert store.get(item.inventory_id).acquisition_cost == Decimal("0")
+    assert store.list_sale_costs(sale.sale_id) == []
+    assert store.reconciliation_status(sale.sale_id) == (
+        "incomplete",
+        ("fees", "shipping", "refunds", "adjustments"),
+    )
+    assert "USD 75.00" in detail.text
+    assert "USD 0.00" in detail.text
+    assert "Recorded profit (provisional)" in detail.text
+    assert "Recorded margin (provisional)" in detail.text
+    assert "Missing categories remain unknown" in detail.text
+    assert "Final realized profit, margin, and ROI are unavailable" in detail.text
+    assert "provisional" in listing.text and "100.0% margin" in listing.text
+    assert "missing categories unknown" in listing.text
+    assert "Recorded profit (provisional)" in inventory.text
+    assert "Final realized profit and ROI are unavailable" in inventory.text
+    assert "Recorded profit (includes provisional)" in dashboard.text
+    assert "Fully reconciled realized profit" in dashboard.text
 
 
 def test_mixed_currency_metrics_are_separate_and_profit_unavailable(monkeypatch, tmp_path):
@@ -1307,8 +1365,17 @@ def test_manual_research_snapshot_history_detail_immutability_and_link(monkeypat
     realized = client.get(snapshot_path)
     assert "Realized outcome" in realized.text
     assert "USD 70.00" in realized.text
-    assert "Recorded realized profit" in realized.text
+    assert "Accounting incomplete" in realized.text
+    assert "recorded profit (provisional)" in realized.text
+    assert "final realized profit and ROI are unavailable" in realized.text
+    assert "Unavailable" in realized.text
     assert f'href="/sales/{sale.sale_id}"' in realized.text
+
+    for category in ("fees", "shipping", "refunds", "adjustments"):
+        store.set_reconciliation_confirmation(sale.sale_id, category, confirmed=True)
+    completed = client.get(snapshot_path)
+    assert "Net profit / realized profit" in completed.text
+    assert "Accounting incomplete" not in completed.text
 
     inventory_detail = client.get(f"/inventory/{item.inventory_id}")
     sale_detail = client.get(f"/sales/{sale.sale_id}")
