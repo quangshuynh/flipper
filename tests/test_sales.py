@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 import ebay.sale_import as sale_import_module
-from ebay.orders import EbayOrder, EbayOrderLineItem, Money, OrderPricingSummary
+from ebay.orders import EbayOrder, EbayOrderLineItem, Money, OrderPricingSummary, normalize_order
 from ebay.reconciliation import ReconciliationResult, ReconciliationStatus
 from ebay.sale_import import SaleImportStatus, import_ebay_sales
 from inventory.store import InventoryStore, SaleConflictError, SaleImportError
@@ -345,7 +345,7 @@ def test_s000001_shipping_revenue_tax_and_fee_semantics(tmp_path):
 
 def test_explicit_reimport_enriches_matching_legacy_item_only_sale(tmp_path):
     store = InventoryStore(tmp_path / "inventory.db")
-    inventory(store)
+    inventory(store, acquisition_cost="0")
     legacy, _ = store.import_sale(
         inventory_id="Q0001",
         marketplace="eBay",
@@ -357,14 +357,30 @@ def test_explicit_reimport_enriches_matching_legacy_item_only_sale(tmp_path):
         currency="USD",
         sold_at=SOLD_AT,
     )
-    ebay_order = EbayOrder(
-        **{
-            **order(line(amount="75")).__dict__,
-            "pricing": OrderPricingSummary(
-                shipping=Money(Decimal("8.07"), "USD"),
-                tax=Money(Decimal("3.98"), "USD"),
-                total=Money(Decimal("87.05"), "USD"),
-            ),
+    ebay_order = normalize_order(
+        {
+            "orderId": "order-1",
+            "creationDate": "2026-09-15T12:34:56Z",
+            "lineItems": [
+                {
+                    "lineItemId": "line-1",
+                    "title": "Item Q0001",
+                    "sku": "Q0001",
+                    "quantity": 1,
+                    "lineItemCost": {"value": "75", "currency": "USD"},
+                    "ebayCollectAndRemitTaxes": [
+                        {
+                            "taxType": "STATE_SALES_TAX",
+                            "amount": {"value": "3.98", "currency": "USD"},
+                            "collectionMethod": "NET",
+                        }
+                    ],
+                }
+            ],
+            "pricingSummary": {
+                "deliveryCost": {"value": "8.07", "currency": "USD"},
+                "total": {"value": "87.05", "currency": "USD"},
+            },
         }
     )
 
@@ -374,9 +390,17 @@ def test_explicit_reimport_enriches_matching_legacy_item_only_sale(tmp_path):
     assert enriched.status is SaleImportStatus.IMPORTED
     assert enriched.sale is not None
     assert enriched.sale.sale_id == legacy.sale_id
+    assert enriched.sale.inventory_id == "Q0001"
+    assert enriched.sale.item_revenue == Decimal("75")
     assert enriched.sale.gross_amount == Decimal("83.07")
     assert enriched.sale.buyer_shipping == Decimal("8.07")
+    assert enriched.sale.marketplace_tax == Decimal("3.98")
+    assert enriched.sale.checkout_total == Decimal("87.05")
+    assert store.get("Q0001").acquisition_cost_cents == 0
+    assert store.reconciliation_status(legacy.sale_id)[0] == "incomplete"
     assert repeated.status is SaleImportStatus.ALREADY_IMPORTED
+    assert repeated.sale == enriched.sale
+    assert len(store.list_sales()) == 1
 
 
 def test_unknown_buyer_shipping_is_not_treated_as_known_zero(tmp_path):

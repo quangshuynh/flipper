@@ -50,8 +50,9 @@ turns changed immutable facts into conflicts. Opening or refreshing the review n
 inventory or accounting.
 
 Fulfillment `lineItems[].lineItemCost` supplies item revenue. `pricingSummary.deliveryCost` supplies
-buyer-paid shipping at order level, while `pricingSummary.tax` is marketplace-collected tax and
-`pricingSummary.total` is customer checkout context. Flipper imports item plus buyer-paid shipping
+buyer-paid shipping at order level. Marketplace-collected tax may appear in `pricingSummary.tax` or
+`lineItems[].ebayCollectAndRemitTaxes`; `pricingSummary.total` is retained as reported checkout
+context. Flipper imports item plus buyer-paid shipping
 as seller revenue only when shipping attribution is exact: a single-line order, or an explicitly
 zero-shipping multi-line order. It does not allocate nonzero order shipping across lines. Tax never
 enters revenue, profit, expense, or adjustments. Delivery discounts and line promotions remain

@@ -84,6 +84,29 @@ def _date(value: Any, *, required: bool = False) -> datetime | None:
         raise OrderResponseError("eBay returned a malformed order date") from exc
 
 
+def _marketplace_tax(raw_items: list[Any]) -> Money | None:
+    """Return exact marketplace-collected tax when line totals use one currency."""
+    amounts: list[Money] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        taxes = raw_item.get("ebayCollectAndRemitTaxes") or []
+        if not isinstance(taxes, list):
+            raise OrderResponseError("eBay returned malformed marketplace tax")
+        for tax in taxes:
+            if not isinstance(tax, dict):
+                raise OrderResponseError("eBay returned malformed marketplace tax")
+            amount = _money(tax.get("amount"))
+            if amount is not None:
+                amounts.append(amount)
+    if not amounts:
+        return None
+    currency = amounts[0].currency
+    if any(amount.currency != currency for amount in amounts):
+        return None
+    return Money(sum((amount.value for amount in amounts), Decimal(0)), currency)
+
+
 def normalize_order(raw: Any) -> EbayOrder:
     """Normalize an API order without retaining buyer/contact/address fields."""
     if not isinstance(raw, dict):
@@ -141,6 +164,7 @@ def normalize_order(raw: Any) -> EbayOrder:
     if not isinstance(cancel_status, dict):
         raise OrderResponseError("eBay returned a malformed cancellation status")
     assert creation_date is not None
+    summary_tax = _money(summary.get("tax"))
     return EbayOrder(
         order_id=order_id,
         creation_date=creation_date,
@@ -152,7 +176,7 @@ def normalize_order(raw: Any) -> EbayOrder:
         pricing=OrderPricingSummary(
             subtotal=_money(summary.get("priceSubtotal")),
             shipping=_money(summary.get("deliveryCost")),
-            tax=_money(summary.get("tax")),
+            tax=summary_tax if summary_tax is not None else _marketplace_tax(raw_items),
             discount=_money(summary.get("deliveryDiscount") or summary.get("totalDiscount")),
             total=_money(summary.get("total")),
         ),

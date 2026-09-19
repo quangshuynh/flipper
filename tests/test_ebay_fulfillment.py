@@ -89,6 +89,40 @@ def test_successful_normalization_discards_pii_and_retains_money():
     assert "discard" not in repr(order)
 
 
+def test_marketplace_collect_and_remit_tax_is_retained_when_summary_omits_tax():
+    raw = raw_order(
+        lineItems=[
+            {
+                "lineItemId": "line-1",
+                "title": "Recorder",
+                "sku": "Q0001",
+                "quantity": 1,
+                "lineItemCost": {"value": "75.0", "currency": "USD"},
+                "ebayCollectAndRemitTaxes": [
+                    {
+                        "taxType": "STATE_SALES_TAX",
+                        "amount": {"value": "3.98", "currency": "USD"},
+                        "collectionMethod": "NET",
+                    }
+                ],
+            }
+        ],
+        pricingSummary={
+            "priceSubtotal": {"value": "75.0", "currency": "USD"},
+            "deliveryCost": {"value": "8.07", "currency": "USD"},
+            "total": {"value": "83.07", "currency": "USD"},
+        },
+    )
+
+    order = FulfillmentClient(
+        OAuth(), session=Session([Response(body={"orders": [raw], "total": 1})])
+    ).get_orders(*dates())[0]
+
+    assert order.pricing.tax is not None
+    assert order.pricing.tax.value == Decimal("3.98")
+    assert order.pricing.tax.currency == "USD"
+
+
 def test_empty_and_missing_optional_fields():
     assert (
         FulfillmentClient(
