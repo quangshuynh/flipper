@@ -970,6 +970,8 @@ def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_pa
     )
 
     assert landing.status_code == results.status_code == detail.status_code == 200
+    assert 'name="listing_status" value="active"' in landing.text
+    assert "Active listings</a>" in landing.text and "Sold listings</a>" in landing.text
     assert "Start with a deliberate search" in landing.text
     assert "Used mirrorless camera" in results.text
     assert "Needs resale estimate" in results.text
@@ -987,6 +989,35 @@ def test_deals_workspace_search_detail_and_unknown_economics(monkeypatch, tmp_pa
     assert "USD 2.86" in analyzed.text and "USD 5.00/day" in analyzed.text
     assert "sold comparables" in analyzed.text
     assert "sold comparable evidence in the asking-price currency is unavailable" in analyzed.text
+
+
+def test_sold_listing_mode_is_honest_and_never_falls_back_to_active(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+
+    def unexpected_discovery():
+        raise AssertionError("sold mode must not call Browse or seller APIs")
+
+    monkeypatch.setattr(web_app, "_discovery", unexpected_discovery)
+    response = client.get(
+        "/deals",
+        params={
+            "listing_status": "sold",
+            "q": "camera",
+            "category": "electronics",
+            "sort": "price_desc",
+        },
+    )
+
+    assert response.status_code == 200
+    assert 'href="/deals?' in response.text
+    assert "listing_status=active" in response.text
+    assert "q=camera" in response.text and "sort=price_desc" in response.text
+    assert "Automatic marketplace-wide sold search is unavailable" in response.text
+    assert "No sold search was run" in response.text
+    assert "did not fall back to active results" in response.text
+    assert "eBay relevance" not in response.text
+    assert "Used mirrorless camera" not in response.text
+    assert "ended listing is not evidence of a sale" in response.text
 
 
 def test_deal_acquisition_requires_actual_facts_and_uses_q_number(monkeypatch, tmp_path):
