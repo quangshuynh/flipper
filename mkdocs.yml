@@ -48,7 +48,7 @@ nav:
   - Reference:
       - CLI: reference/cli.md
       - Configuration: reference/configuration.md
-      - Backup boundary: operations/backup-boundary.md
+      - Backup & restore: operations/backup-boundary.md
       - Troubleshooting: operations/troubleshooting.md
   - Development:
       - Architecture: development/architecture.md
