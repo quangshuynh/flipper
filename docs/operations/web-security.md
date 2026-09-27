@@ -7,21 +7,24 @@ provider's access controls; those can be added later as defense in depth.
 
 !!! note "Deployment"
     This page describes the boundary itself. The container, Render service, and cutover runbook are
-    in [Hosted deployment](deployment.md).
+    in [Hosted deployment](deployment.md). Phone access on a home network without hosting is in
+    [Phone access](../guides/phone-access.md).
 
 ## Security modes
 
-`FLIPPER_WEB_SECURITY_MODE` selects one of two explicit modes. Flipper never guesses the mode
+`FLIPPER_WEB_SECURITY_MODE` selects one of three explicit modes. Flipper never guesses the mode
 from other settings.
 
-| | `local` (default) | `hosted` |
-| --- | --- | --- |
-| Sign-in | Only when a password hash and session secret are both configured | Always |
-| Without a password | Serves loopback clients (`127.0.0.1`, `::1`) only | Refuses to start |
-| Trusted hosts | `localhost`, `127.0.0.1`, `::1`, plus `FLIPPER_ALLOWED_HOSTS` | Host of `FLIPPER_PUBLIC_ORIGIN`, plus `FLIPPER_ALLOWED_HOSTS` |
-| Mutation origin | The request's own validated host | Exactly `FLIPPER_PUBLIC_ORIGIN` |
-| Session cookie | `flipper_session`, not `Secure` | `__Host-flipper_session`, `Secure` |
-| HSTS | No | `max-age=31536000` |
+| | `local` (default) | `lan` | `hosted` |
+| --- | --- | --- | --- |
+| Started by | `uvicorn web.app:app` | `python main.py web lan` | The production container |
+| Sign-in | Only when a password hash and session secret are both configured | Always | Always |
+| Without a password | Serves loopback clients (`127.0.0.1`, `::1`) only | Refuses to start | Refuses to start |
+| Client addresses | Any, once a password is configured | Loopback and private networks only | Any (behind the host's proxy) |
+| Trusted hosts | `localhost`, `127.0.0.1`, `::1`, plus `FLIPPER_ALLOWED_HOSTS` | Same, plus any private IP literal | Host of `FLIPPER_PUBLIC_ORIGIN`, plus `FLIPPER_ALLOWED_HOSTS` |
+| Mutation origin | The request's own validated host | The request's own validated host | Exactly `FLIPPER_PUBLIC_ORIGIN` |
+| Session cookie | `flipper_session`, not `Secure` | `flipper_session`, not `Secure` | `__Host-flipper_session`, `Secure` |
+| HSTS | No | No | `max-age=31536000` |
 
 In **local mode without a password**, `uvicorn web.app:app --reload` works as before. Every
 request must come from this computer and name a loopback host. If Flipper is accidentally started
@@ -29,9 +32,17 @@ on a network interface, or behind a hosting proxy without `FLIPPER_WEB_SECURITY_
 rejects the traffic instead of serving the books without authentication. Forgetting the mode
 variable therefore fails closed.
 
-**Local mode with a password** is for testing sign-in, or for reaching Flipper from a phone on a
-trusted LAN. Add the LAN host name to `FLIPPER_ALLOWED_HOSTS`. Cookies are not `Secure` because
-LAN HTTP is plaintext. Do not use this mode for internet exposure.
+**Local mode with a password** is for testing sign-in. Cookies are not `Secure`. Do not use this
+mode for network or internet exposure.
+
+**LAN mode** is for reaching Flipper from a phone on a trusted home network; see
+[Phone access](../guides/phone-access.md). It requires the password hash and a session secret. The
+`web lan` command generates a per-process secret in memory when none is configured. It rejects
+`FLIPPER_PUBLIC_ORIGIN`. It serves only clients whose TCP address is loopback, RFC 1918 private,
+link-local, or IPv6 unique-local, and refuses others with `403`. It also accepts any private IP
+literal as the `Host`. A literal address cannot be DNS-rebound, and the phone URL survives a DHCP
+change, while other host names still need `FLIPPER_ALLOWED_HOSTS`. It is plain HTTP and must not
+be exposed to the Internet.
 
 **Hosted mode** refuses to start unless all three of `FLIPPER_PASSWORD_HASH`,
 `FLIPPER_SESSION_SECRET`, and `FLIPPER_PUBLIC_ORIGIN` are present and valid. The following also
@@ -148,6 +159,7 @@ in `web/security.py`:
 | `POST /api/ebay/account-deletion` | eBay deletion notification; still requires a valid `X-EBAY-SIGNATURE` |
 | `GET`/`POST /login` | Sign-in (the `POST` still requires same-origin) |
 | `/static/app.css`, `/static/operational.css`, `/static/flipper-logo2.png` | Login page styling and logo |
+| `/static/manifest.webmanifest` | Home-screen metadata (name, icon, colors); browsers fetch it without cookies |
 
 Every other route is private, including routes added later: dashboard, Deals, Research History,
 inventory and attachments, sales and accounting, Insights, Analytics, Analyze, Settings, eBay
@@ -188,13 +200,14 @@ Flipper's own origin, where tokens do not help.
 Every request, including the eBay endpoint, must carry a `Host` in the allow-list, or it receives
 `400 Invalid host header.` Host names are matched case-insensitively without ports. Ports are
 enforced by the origin check. Add extra names, such as a platform health-check host or a LAN name,
-with `FLIPPER_ALLOWED_HOSTS`. No provider host name is hard-coded.
+with `FLIPPER_ALLOWED_HOSTS`. No provider host name is hard-coded. LAN mode additionally accepts
+private IP literals, never names.
 
 ## Security headers and caching
 
 | Header | Value | Applied to |
 | --- | --- | --- |
-| `Content-Security-Policy` | `default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'` | HTML responses |
+| `Content-Security-Policy` | `default-src 'none'; style-src 'self'; img-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'` | HTML responses |
 | `X-Content-Type-Options` | `nosniff` | All |
 | `X-Frame-Options` | `DENY` | All |
 | `Referrer-Policy` | `same-origin` | All |

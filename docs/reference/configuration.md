@@ -67,7 +67,7 @@ never creates, moves, or copies files. The CLI-only analyzer caches (`data/flipp
 
 | Variable | Meaning |
 | --- | --- |
-| `FLIPPER_WEB_SECURITY_MODE` | `local` (default) or `hosted` |
+| `FLIPPER_WEB_SECURITY_MODE` | `local` (default), `lan` (set by `python main.py web lan`), or `hosted` |
 | `FLIPPER_PASSWORD_HASH` | Encoded owner-password hash from `python main.py auth hash-password` |
 | `FLIPPER_SESSION_SECRET` | Session-signing secret from `python main.py auth session-secret` |
 | `FLIPPER_PUBLIC_ORIGIN` | Canonical `https://` origin; required in hosted mode, rejected otherwise |
@@ -75,8 +75,9 @@ never creates, moves, or copies files. The CLI-only analyzer caches (`data/flipp
 
 With nothing set, the web app runs in local mode and serves only this computer, as before. Hosted
 mode refuses to start unless the hash, secret, and public origin are all valid. Configuring only
-one of the hash and the secret stops startup in either mode. These values are never stored in
-SQLite or backups. See [Web security](../operations/web-security.md).
+one of the hash and the secret stops startup in local mode. LAN mode requires the hash and generates
+a per-process secret when none is configured; see [Phone access](../guides/phone-access.md). These
+values are never stored in SQLite or backups. See [Web security](../operations/web-security.md).
 
 The production container defaults to `FLIPPER_WEB_SECURITY_MODE=hosted`,
 `FLIPPER_DATA_DIR=/var/data/flipper`, and `FLIPPER_CREDENTIAL_BACKEND=file`, and refuses to start

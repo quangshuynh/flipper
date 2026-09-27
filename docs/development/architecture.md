@@ -19,7 +19,9 @@ configuration and trusted hosts, requires same-origin proof for every non-`GET` 
 an owner session for every route outside an explicit public allow-list, and adds security headers.
 Routes never check authentication themselves. `web/passwords.py` (scrypt owner-password hash) and
 `web/sessions.py` (stateless signed session cookie) have no database state. See
-[Web security](../operations/web-security.md).
+[Web security](../operations/web-security.md). `web/lan.py` is the explicit `python main.py web lan`
+launcher: it validates LAN configuration, resolves storage exactly as the web app does, and runs
+one Uvicorn process in the `lan` security mode ([Phone access](../guides/phone-access.md)).
 
 `backup/` owns full backups of the authoritative boundary: a consistent SQLite snapshot through
 the online backup API, the attachment files that snapshot references, a verification manifest,

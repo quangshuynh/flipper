@@ -19,6 +19,11 @@ iPhone / browser
 There is exactly one writable authoritative database. There is no Postgres, no replication, and no
 synchronization with a local copy.
 
+!!! note "Paid hosting is optional"
+    Nothing here is deployed automatically, and the Render service is deferred until you choose to
+    pay for it. To use Flipper from a phone at home for free while it keeps running on your own
+    computer, use [Phone access (LAN mode)](../guides/phone-access.md) instead.
+
 ## Services
 
 | Service | What it runs | Status |

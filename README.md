@@ -58,6 +58,17 @@ CSRF protection, and the fail-closed hosted mode are described in
 [Web security](docs/operations/web-security.md). The production container, Render service, and
 real-data cutover runbook are in [Hosted deployment](docs/operations/deployment.md).
 
+### Use Flipper from your phone at home
+
+```bash
+python main.py web lan
+```
+
+LAN mode keeps Flipper and its database on your computer and lets a phone on the same trusted
+Wi-Fi sign in to it. It requires an owner password and refuses non-private clients. It is not for
+public Wi-Fi, port forwarding, or Internet exposure. See
+[Phone access on your home network](docs/guides/phone-access.md).
+
 ## Documentation
 
 The source documentation lives in [`docs/`](docs/index.md). Build it locally with:
