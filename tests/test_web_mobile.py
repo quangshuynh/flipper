@@ -192,7 +192,13 @@ def test_dense_tables_scroll_inside_named_focusable_regions(monkeypatch, tmp_pat
 def test_long_values_wrap_instead_of_widening_the_page():
     wrap_rule = re.search(r"([^{}]*)\{overflow-wrap:anywhere\}", APP_CSS.split("/* Mobile")[1])
     selectors = set(wrap_rule.group(1).split(","))
-    for selector in (".attachment-grid h3", ".economics-grid strong", ".note-content"):
+    for selector in (
+        ".attachment-grid h3",
+        ".economics-grid strong",
+        ".note-content",
+        ".deal-card h2",  # long unbroken listing titles on Deals cards and deal detail
+        ".deal-hero h2",
+    ):
         assert selector in selectors
     assert "main{overflow-wrap:break-word}" in APP_CSS
     assert "main :is(.two-col,.detail-grid,.deal-layout){grid-template-columns:minmax(0,1fr)}" in (
