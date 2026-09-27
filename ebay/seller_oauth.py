@@ -14,6 +14,9 @@ import keyring
 import requests
 from keyring.errors import KeyringError
 
+from ebay.credential_store import FileCredentialStore
+from storage_config import FILE_BACKEND, StorageConfigurationError, resolve_storage
+
 
 FULFILLMENT_READONLY_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly"
 FINANCES_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.finances"
@@ -35,6 +38,17 @@ class CredentialStore(Protocol):
     def get_password(self, service: str, username: str) -> str | None: ...
     def set_password(self, service: str, username: str, password: str) -> None: ...
     def delete_password(self, service: str, username: str) -> None: ...
+
+
+def credential_store_from_environment() -> CredentialStore:
+    """Select the refresh-token store: the OS keyring by default, or an owner-only file."""
+    try:
+        storage = resolve_storage()
+    except StorageConfigurationError as exc:
+        raise SellerOAuthError(str(exc)) from None
+    if storage.credential_backend == FILE_BACKEND:
+        return FileCredentialStore(storage.credential_file)
+    return keyring
 
 
 @dataclass(frozen=True)
@@ -89,12 +103,17 @@ class SellerOAuthConfig:
         return f"flipper.ebay.seller.{self.environment}"
 
     def connection_status(
-        self, credential_store: CredentialStore = keyring
+        self, credential_store: CredentialStore | None = None
     ) -> SellerConnectionStatus:
         """Inspect local authorization without exposing or refreshing its credential."""
         try:
-            connected = bool(credential_store.get_password(self.credential_service, self.client_id))
-        except KeyringError:
+            store = (
+                credential_store
+                if credential_store is not None
+                else credential_store_from_environment()
+            )
+            connected = bool(store.get_password(self.credential_service, self.client_id))
+        except (KeyringError, SellerOAuthError):
             connected = None
         return SellerConnectionStatus(
             environment=self.environment,
@@ -104,7 +123,7 @@ class SellerOAuthConfig:
 
     @classmethod
     def connection_status_from_environment(
-        cls, credential_store: CredentialStore = keyring
+        cls, credential_store: CredentialStore | None = None
     ) -> SellerConnectionStatus:
         """Return safe configuration and credential-presence metadata."""
         try:
@@ -123,19 +142,23 @@ class SellerOAuthConfig:
 
 
 class SellerOAuthClient:
-    """Mint and cache User access tokens while keyring stores only the refresh token."""
+    """Mint and cache User access tokens while the credential store keeps only the refresh token."""
 
     def __init__(
         self,
         config: SellerOAuthConfig,
         *,
         session: requests.Session | None = None,
-        credential_store: CredentialStore = keyring,
+        credential_store: CredentialStore | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.config = config
         self._session = session or requests.Session()
-        self._store = credential_store
+        self._store = (
+            credential_store
+            if credential_store is not None
+            else credential_store_from_environment()
+        )
         self._clock = clock
         self._access_token: str | None = None
         self._expires_at = 0.0
@@ -218,7 +241,9 @@ class SellerOAuthClient:
         try:
             self._store.set_password(self._service, self.config.client_id, refresh_token)
         except KeyringError as exc:
-            raise SellerOAuthError("The OS credential store could not save authorization") from exc
+            raise SellerOAuthError(
+                "The configured credential store could not save authorization"
+            ) from exc
         self._remember_access_token(body)
 
     def _remember_access_token(self, body: dict[str, Any]) -> str:
@@ -240,7 +265,9 @@ class SellerOAuthClient:
         try:
             refresh_token = self._store.get_password(self._service, self.config.client_id)
         except KeyringError as exc:
-            raise SellerOAuthError("The OS credential store could not read authorization") from exc
+            raise SellerOAuthError(
+                "The configured credential store could not read authorization"
+            ) from exc
         if not refresh_token:
             raise SellerNotConnectedError(
                 "No eBay seller authorization is stored; run 'python main.py ebay connect'"
@@ -262,7 +289,7 @@ class SellerOAuthClient:
             self._store.delete_password(self._service, self.config.client_id)
         except KeyringError as exc:
             raise SellerOAuthError(
-                "The OS credential store could not remove authorization"
+                "The configured credential store could not remove authorization"
             ) from exc
         self._access_token = None
         self._expires_at = 0.0

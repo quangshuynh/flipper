@@ -5,7 +5,11 @@ Jinja web interface. Domain modules own parsing, pricing, inventory, eBay normal
 reconciliation, sales economics, and reports. Web routes reuse those services; templates contain no
 SQL or accounting formulas. CSS is static and requires no Node build.
 
-SQLite under `inventory/` is authoritative and versioned by ordered migrations. Attachments are
+SQLite under `inventory/` is authoritative and versioned by ordered migrations. `storage_config.py`
+resolves writable locations for both the CLI and web app. The web app migrates its database once
+during startup and fails to start on error; request stores then skip the redundant schema check,
+while each SQLite operation still opens and closes its own connection. Independent CLI stores keep
+checking migrations on every operation. Attachments are
 controlled local files. External eBay data is normalized in memory and only supported explicit
 imports create minimized records. The dashboard's local pages do not depend on live eBay; the eBay
 Listings route deliberately isolates its live read.

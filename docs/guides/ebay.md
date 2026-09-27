@@ -1,7 +1,10 @@
 # eBay seller integration
 
 Flipper's eBay integration is read-only toward eBay. OAuth refresh tokens are kept in the operating
-system credential store. Browser pages never handle OAuth codes or tokens.
+system credential store by default, or in an owner-only server file when
+`FLIPPER_CREDENTIAL_BACKEND=file` is configured (see
+[Configuration](../reference/configuration.md#file-credential-backend)). Browser pages never handle
+OAuth codes or tokens.
 
 ```bash
 python main.py ebay connect

@@ -321,11 +321,26 @@ def parse_usd_cents(value: str | Decimal) -> int:
 class InventoryStore:
     """Own the local inventory database and its schema migrations."""
 
-    def __init__(self, path: str | Path, *, clock=None, reuse_schema_check: bool = False) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        clock=None,
+        reuse_schema_check: bool = False,
+        schema_verified: bool = False,
+    ) -> None:
+        """Create a store for one database path.
+
+        ``schema_verified`` lets a caller that already ran ``initialize()`` successfully for this
+        path in the current process skip the redundant check. It only takes effect together
+        with ``reuse_schema_check``; the default store still checks on every operation.
+        """
+        if schema_verified and not reuse_schema_check:
+            raise ValueError("schema_verified requires reuse_schema_check")
         self.path = Path(path)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._reuse_schema_check = reuse_schema_check
-        self._initialized = False
+        self._initialized = schema_verified
 
     def _utc_now(self) -> str:
         value = self._clock()

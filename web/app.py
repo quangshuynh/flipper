@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -83,9 +85,9 @@ from reports.service import (
     sales_report,
     valuation_accuracy_report,
 )
+from storage_config import StorageConfig, resolve_storage
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DATABASE = ROOT / "data" / "flipper_inventory.db"
 load_dotenv(ROOT / ".env")
 templates = Jinja2Templates(directory=ROOT / "web" / "templates")
 app.mount("/static", StaticFiles(directory=ROOT / "web" / "static"), name="static")
@@ -93,16 +95,51 @@ research_store = EphemeralResearchStore()
 RESEARCH_COOKIE = "flipper_research"
 
 
+_schema_lock = threading.Lock()
+_initialized_databases: set[str] = set()
+
+
+def _storage() -> StorageConfig:
+    return resolve_storage(default_root=ROOT)
+
+
+def initialize_storage() -> Path:
+    """Validate storage configuration and migrate the selected database once per process.
+
+    Application startup calls this before serving. Request handlers call it too, but after the
+    first success for a path it is only a set lookup, so ordinary requests never repeat the
+    migration transaction. A failure is never cached and raises to the caller.
+    """
+    path = _storage().inventory_database
+    key = os.path.abspath(path)
+    if key not in _initialized_databases:
+        with _schema_lock:
+            if key not in _initialized_databases:
+                InventoryStore(path).initialize()
+                _initialized_databases.add(key)
+    return path
+
+
+_base_lifespan = app.router.lifespan_context
+
+
+@asynccontextmanager
+async def _lifespan(application):
+    """Refuse to start serving unless storage configuration and migrations succeed."""
+    initialize_storage()
+    async with _base_lifespan(application) as state:
+        yield state
+
+
+app.router.lifespan_context = _lifespan
+
+
 def _store() -> InventoryStore:
-    path = Path(os.getenv("FLIPPER_INVENTORY_DB", str(DEFAULT_DATABASE)))
-    store = InventoryStore(path, reuse_schema_check=True)
-    store.initialize()
-    return store
+    return InventoryStore(initialize_storage(), reuse_schema_check=True, schema_verified=True)
 
 
 def _attachments(store: InventoryStore) -> AttachmentService:
-    configured = os.getenv("FLIPPER_ATTACHMENT_ROOT")
-    return AttachmentService(store, configured if configured else None)
+    return AttachmentService(store, _storage().attachment_root)
 
 
 def _today() -> date:

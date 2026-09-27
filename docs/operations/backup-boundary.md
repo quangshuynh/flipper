@@ -6,5 +6,7 @@ or a file without its matching metadata, is incomplete.
 
 Runtime databases and attachments are ignored by Git and are not a source-control backup. Credential
 store entries, `.env`, and OAuth secrets are outside this data boundary and need a separate secure
-recovery plan. Test restores to a separate path selected with `FLIPPER_INVENTORY_DB`; never test
+recovery plan. When `FLIPPER_DATA_DIR` is used with the file credential backend, its `credentials/`
+directory is a secret, not business data; exclude it from ordinary data copies and reconnect eBay
+rather than restoring a token you cannot protect. Test restores to a separate path selected with `FLIPPER_INVENTORY_DB`; never test
 against the working database. A coordinated built-in backup command is future work.
