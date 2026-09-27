@@ -1001,3 +1001,33 @@ def test_cli_backup_uses_configured_storage_without_migrating(tmp_path, monkeypa
     assert database.read_bytes() == before
     manifest = json.loads((tmp_path / "out" / "b" / "manifest.json").read_text())
     assert manifest["flipper_schema_version"] == 13
+
+
+def test_web_security_settings_never_enter_a_backup(tmp_path, monkeypatch):
+    from web.passwords import hash_password
+
+    password_hash = hash_password("correct horse battery staple", n=2**14)
+    session_secret = "Zt4vQ9pLr2Xw8Kd3Nf6Hj1Ms5Bc7Ga0Ey-Ui_Oo4Pp2Rr6Tt8"
+    public_origin = "https://flipper-private-origin.example.test"
+    data_dir = tmp_path / "srv" / "data"
+    populate(data_dir)
+    settings = {
+        "FLIPPER_WEB_SECURITY_MODE": "hosted",
+        "FLIPPER_PASSWORD_HASH": password_hash,
+        "FLIPPER_SESSION_SECRET": session_secret,
+        "FLIPPER_PUBLIC_ORIGIN": public_origin,
+    }
+    (data_dir / ".env").write_text("".join(f"{k}={v}\n" for k, v in settings.items()))
+    for name, value in settings.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("FLIPPER_DATA_DIR", str(data_dir))
+
+    assert cli.main(["backup", "create", "--output-dir", str(tmp_path / "out"), "--name", "b"]) == 0
+
+    backup = tmp_path / "out" / "b"
+    for path in backup.rglob("*"):
+        if path.is_file():
+            content = path.read_bytes()
+            for value in (password_hash, session_secret, public_origin, *settings):
+                assert value.encode() not in content, (path.name, value[:12])
+    assert verify_backup(backup).ok

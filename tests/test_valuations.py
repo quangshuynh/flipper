@@ -2,13 +2,13 @@ import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from fastapi.testclient import TestClient
 
 import main
 from inventory.store import InventoryNotFoundError, InventoryStore
 from reports.service import valuation_accuracy_report
 from valuations import compare_valuation_to_sale
 from web.app import app
+from tests.web_client import local_client
 
 
 NOW = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
@@ -256,7 +256,7 @@ def test_cli_and_web_show_snapshot_comparison_and_small_sample(monkeypatch, tmp_
     assert "actual gross: USD 110.10" in output
     assert "recorded actual profit (incomplete)" in output
     monkeypatch.setenv("FLIPPER_INVENTORY_DB", str(database))
-    client = TestClient(app)
+    client = local_client(app)
     assert "Baseline valuation" in client.get(f"/inventory/{item.inventory_id}").text
     detail = client.get(f"/sales/{sale.sale_id}").text
     assert "Estimate vs actual" in detail

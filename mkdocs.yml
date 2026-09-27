@@ -49,6 +49,7 @@ nav:
       - CLI: reference/cli.md
       - Configuration: reference/configuration.md
       - Backup & restore: operations/backup-boundary.md
+      - Web security: operations/web-security.md
       - Troubleshooting: operations/troubleshooting.md
   - Development:
       - Architecture: development/architecture.md

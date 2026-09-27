@@ -53,6 +53,10 @@ uvicorn web.app:app --reload
 Open `http://127.0.0.1:8000`. The dashboard uses local data. Deals can search eBay through its
 read-only Browse API or analyze a manually entered opportunity without fetching its source URL.
 
+Without a configured owner password the web app serves only this computer. Single-user sign-in,
+CSRF protection, and the fail-closed hosted mode are described in
+[Web security](docs/operations/web-security.md).
+
 ## Documentation
 
 The source documentation lives in [`docs/`](docs/index.md). Build it locally with:

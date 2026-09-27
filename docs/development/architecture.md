@@ -14,6 +14,13 @@ controlled local files. External eBay data is normalized in memory and only supp
 imports create minimized records. The dashboard's local pages do not depend on live eBay; the eBay
 Listings route deliberately isolates its live read.
 
+`web/security.py` is the web app's single security boundary: one middleware that validates
+configuration and trusted hosts, requires same-origin proof for every non-`GET` request, requires
+an owner session for every route outside an explicit public allow-list, and adds security headers.
+Routes never check authentication themselves. `web/passwords.py` (scrypt owner-password hash) and
+`web/sessions.py` (stateless signed session cookie) have no database state. See
+[Web security](../operations/web-security.md).
+
 `backup/` owns full backups of the authoritative boundary: a consistent SQLite snapshot through
 the online backup API, the attachment files that snapshot references, a verification manifest,
 restore into a new directory, and the `flipper-logical-v1` fingerprint used to prove equivalence.

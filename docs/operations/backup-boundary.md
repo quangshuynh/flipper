@@ -39,7 +39,8 @@ are not part of the boundary.
 - eBay seller credentials: the OS keyring entry, or `FLIPPER_DATA_DIR/credentials/` with the file
   credential backend.
 - `.env`, OAuth access or refresh tokens, authorization codes, and any session or authentication
-  secret.
+  secret, including the web security settings `FLIPPER_PASSWORD_HASH`, `FLIPPER_SESSION_SECRET`,
+  `FLIPPER_PUBLIC_ORIGIN`, and `FLIPPER_ALLOWED_HOSTS` (see [Web security](web-security.md)).
 - Files in the attachment directory that the database does not reference. They are listed on the
   console and counted in the manifest, and they are never copied, repaired, or deleted.
 - Any other file under `FLIPPER_DATA_DIR` or the repository.
