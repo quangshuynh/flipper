@@ -5,9 +5,9 @@ accounts. It has no registration, password-reset email, roles, social login, or 
 boundary is enforced by Flipper itself (`web/security.py`). It does not rely on a hosting
 provider's access controls; those can be added later as defense in depth.
 
-!!! note "Not deployed"
-    This page describes the boundary that makes a future HTTPS deployment safe. Flipper is not
-    deployed anywhere yet, and nothing here creates cloud resources or changes the real database.
+!!! note "Deployment"
+    This page describes the boundary itself. The container, Render service, and cutover runbook are
+    in [Hosted deployment](deployment.md).
 
 ## Security modes
 
@@ -233,20 +233,20 @@ random passphrase remains the primary defense.
 
 ## Reverse proxy expectations
 
-A future host terminates HTTPS at its proxy and forwards to one Uvicorn process. The expected
-invocation is:
+The host terminates HTTPS at its proxy and forwards to one Uvicorn process. The production image
+([Hosted deployment](deployment.md)) runs:
 
 ```bash
-FLIPPER_WEB_SECURITY_MODE=hosted \
 uvicorn web.app:app --host 0.0.0.0 --port "$PORT" \
-  --proxy-headers --forwarded-allow-ips "<the platform proxy's address range>"
+  --no-proxy-headers --no-server-header --timeout-graceful-shutdown 20
 ```
 
 - Flipper's security decisions do not depend on forwarded headers. Origin checks use
   `FLIPPER_PUBLIC_ORIGIN`, cookies are `Secure` by mode, and HSTS is sent by mode.
-- `--forwarded-allow-ips` only makes the reported client address (used for throttling) accurate.
-  Set it to the proxy's addresses. Use `*` only when the platform guarantees nothing but its proxy
-  can reach the container; otherwise any client could spoof its address.
+- Forwarded headers would only make the reported client address (used for throttling) accurate,
+  and that is safe only with `--forwarded-allow-ips` set to the proxy's own addresses. Render
+  publishes no fixed proxy range, and `*` would let any client spoof its address. The image
+  therefore trusts no forwarded headers, and throttling is global.
 - The proxy must pass through the original `Host`, and should redirect plain HTTP to HTTPS.
 - Run one process (no multiple workers), because throttling state is per-process.
 

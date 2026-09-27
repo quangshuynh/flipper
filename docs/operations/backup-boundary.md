@@ -221,20 +221,21 @@ expected result.
 6. Keep the damaged copy read-only until you no longer need it for investigation. Never keep
    writing to both copies.
 
-## Future hosted cutover
+## Hosted cutover
 
-Hosted Flipper does not exist yet. The intended cutover procedure reuses these commands:
+[Hosted deployment](deployment.md#real-data-cutover) has the exact runbook. In outline it reuses
+these commands:
 
 1. Stop writes to the local instance.
 2. `backup create`, then `backup verify` the result.
 3. Transfer the backup directory to the host. Any copy method works because verification
    re-checks every byte.
-4. On the host: `backup verify`, then `backup restore` into the persistent-disk data directory,
-   then `backup verify-restore`.
+4. On the host: `backup verify`, then `backup restore` into a new directory on the persistent
+   disk, then `backup verify-restore`.
 5. Compare `backup fingerprint` of the local source with the restored database. They must be
    equal.
-6. Start hosted Flipper with `FLIPPER_DATA_DIR` pointing at the restored directory, reconnect
-   eBay there, and inspect reports.
+6. Point hosted Flipper's `FLIPPER_DATA_DIR` at the restored directory, which restarts it,
+   reconnect eBay there, and inspect reports.
 7. Only then retire the local writable database. From that point, local development uses
    synthetic data or restored copies that never write back.
 
