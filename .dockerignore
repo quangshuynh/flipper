@@ -1,0 +1,32 @@
+# Allow-list: the production build context contains only what the running app needs. Anything
+# not re-included below (.env, runtime databases, attachments, backups, context.md, .claude/,
+# .git/, tests, docs, caches) can never reach the image.
+*
+
+!requirements.txt
+!*.py
+!backup/
+!collectors/
+!deals/
+!ebay/
+!inventory/
+!notifier/
+!parser/
+!pricing/
+!reports/
+!sales/
+!utils/
+!web/
+!deploy/entrypoint.sh
+!deploy/flipper-cli
+!data/listings.json
+
+**/__pycache__
+**/*.py[cod]
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+**/.env
+**/attachments
+**/credentials
