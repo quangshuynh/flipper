@@ -78,6 +78,11 @@ mode refuses to start unless the hash, secret, and public origin are all valid. 
 one of the hash and the secret stops startup in either mode. These values are never stored in
 SQLite or backups. See [Web security](../operations/web-security.md).
 
+The production container defaults to `FLIPPER_WEB_SECURITY_MODE=hosted`,
+`FLIPPER_DATA_DIR=/var/data/flipper`, and `FLIPPER_CREDENTIAL_BACKEND=file`, and refuses to start
+unless the data directory is on a mounted volume. See
+[Hosted deployment](../operations/deployment.md).
+
 ### File credential backend
 
 The file backend is for a single-user server whose persistent disk is already protected. It stores

@@ -55,7 +55,8 @@ read-only Browse API or analyze a manually entered opportunity without fetching 
 
 Without a configured owner password the web app serves only this computer. Single-user sign-in,
 CSRF protection, and the fail-closed hosted mode are described in
-[Web security](docs/operations/web-security.md).
+[Web security](docs/operations/web-security.md). The production container, Render service, and
+real-data cutover runbook are in [Hosted deployment](docs/operations/deployment.md).
 
 ## Documentation
 

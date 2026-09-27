@@ -50,6 +50,7 @@ nav:
       - Configuration: reference/configuration.md
       - Backup & restore: operations/backup-boundary.md
       - Web security: operations/web-security.md
+      - Hosted deployment: operations/deployment.md
       - Troubleshooting: operations/troubleshooting.md
   - Development:
       - Architecture: development/architecture.md
