@@ -975,7 +975,7 @@ def test_valid_hosted_configuration(password_hash):
         ({web_security.SESSION_SECRET_ENV: None}, "requires FLIPPER_SESSION_SECRET"),
         ({web_security.PUBLIC_ORIGIN_ENV: None}, "requires FLIPPER_PUBLIC_ORIGIN"),
         ({web_security.SESSION_SECRET_ENV: "  "}, "requires FLIPPER_SESSION_SECRET"),
-        ({web_security.MODE_ENV: "production"}, "must be 'local' or 'hosted'"),
+        ({web_security.MODE_ENV: "production"}, "must be 'local', 'lan', or 'hosted'"),
         (
             {web_security.PASSWORD_HASH_ENV: "plaintext-password"},
             "FLIPPER_PASSWORD_HASH is invalid",

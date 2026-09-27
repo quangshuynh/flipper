@@ -6,6 +6,7 @@ routing, in this order:
 1. Resolve security configuration; invalid configuration fails closed (503).
 2. Validate the ``Host`` header against the trusted-host allow-list (400).
 3. Without authentication (local mode, no password configured), serve loopback clients only (403).
+   LAN mode serves only clients on loopback or private-network addresses (403).
 4. Classify the route. Only the explicit allow-lists below are reachable without a session:
    the eBay account-deletion endpoint, the login page, and the login page's static assets.
    Everything else, including routes added later, is private.
@@ -17,7 +18,8 @@ routing, in this order:
 
 Configuration comes from the environment (and the repository ``.env`` for local development):
 
-- ``FLIPPER_WEB_SECURITY_MODE``: ``local`` (default) or ``hosted``.
+- ``FLIPPER_WEB_SECURITY_MODE``: ``local`` (default), ``lan`` (set by ``python main.py web lan``),
+  or ``hosted``.
 - ``FLIPPER_PASSWORD_HASH``: encoded owner-password hash (``python main.py auth hash-password``).
 - ``FLIPPER_SESSION_SECRET``: session signing secret (``python main.py auth session-secret``).
 - ``FLIPPER_PUBLIC_ORIGIN``: canonical ``https://`` origin; hosted mode only.
@@ -58,8 +60,26 @@ SECURITY_ENV_NAMES = (
 )
 
 LOCAL_MODE = "local"
+LAN_MODE = "lan"
 HOSTED_MODE = "hosted"
+SECURITY_MODES = (LOCAL_MODE, LAN_MODE, HOSTED_MODE)
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# Networks LAN mode serves: loopback, RFC 1918 private IPv4, IPv4/IPv6 link-local, and IPv6 unique
+# local addresses. Public addresses, carrier-grade NAT/overlay ranges (100.64.0.0/10), and
+# everything else are refused, so a forwarded router port does not reach the books.
+PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+    )
+)
 
 MIN_SESSION_SECRET_LENGTH = 43  # 32 random bytes as unpadded base64url
 MAX_SESSION_SECRET_LENGTH = 512
@@ -113,6 +133,10 @@ class WebSecurityConfig:
         return self.mode == HOSTED_MODE
 
     @property
+    def lan(self) -> bool:
+        return self.mode == LAN_MODE
+
+    @property
     def auth_required(self) -> bool:
         return self.password_hash is not None
 
@@ -123,6 +147,19 @@ class WebSecurityConfig:
     @property
     def session_cookie(self) -> str:
         return HOSTED_SESSION_COOKIE if self.hosted else LOCAL_SESSION_COOKIE
+
+    def allows_host(self, host: str | None) -> bool:
+        """Whether a normalized ``Host`` name is trusted.
+
+        LAN mode also accepts any private-network IP literal, so the phone URL keeps working when
+        DHCP gives this computer a new address. A literal address cannot be DNS-rebound, and names
+        other than the loopback names still need ``FLIPPER_ALLOWED_HOSTS``.
+        """
+        if host is None:
+            return False
+        if host in self.allowed_hosts:
+            return True
+        return self.lan and is_private_address(host)
 
     def session_codec(self) -> SessionCodec:
         assert self.session_secret is not None and self.password_hash_value is not None
@@ -137,6 +174,17 @@ def wall_clock() -> float:
 def _value(environ: Mapping[str, str], name: str) -> str | None:
     value = environ.get(name, "").strip()
     return value or None
+
+
+def is_private_address(value: str) -> bool:
+    """Whether ``value`` is an IP literal inside :data:`PRIVATE_NETWORKS`."""
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return any(address in network for network in PRIVATE_NETWORKS)
 
 
 def _normalize_host(host: str) -> str | None:
@@ -238,8 +286,10 @@ def resolve_web_security(environ: Mapping[str, str] | None = None) -> WebSecurit
     """Resolve and validate web security settings, failing closed on anything unsafe."""
     environ = os.environ if environ is None else environ
     mode = (_value(environ, MODE_ENV) or LOCAL_MODE).lower()
-    if mode not in {LOCAL_MODE, HOSTED_MODE}:
-        raise WebSecurityConfigurationError(f"{MODE_ENV} must be '{LOCAL_MODE}' or '{HOSTED_MODE}'")
+    if mode not in SECURITY_MODES:
+        raise WebSecurityConfigurationError(
+            f"{MODE_ENV} must be '{LOCAL_MODE}', '{LAN_MODE}', or '{HOSTED_MODE}'"
+        )
     hash_value = _value(environ, PASSWORD_HASH_ENV)
     secret = _value(environ, SESSION_SECRET_ENV)
     origin_value = _value(environ, PUBLIC_ORIGIN_ENV)
@@ -257,6 +307,19 @@ def resolve_web_security(environ: Mapping[str, str] | None = None) -> WebSecurit
         ]
         if missing:
             raise WebSecurityConfigurationError(f"{MODE_ENV}=hosted requires {', '.join(missing)}")
+    elif mode == LAN_MODE:
+        # LAN exposure is never unauthenticated.
+        if origin_value is not None:
+            raise WebSecurityConfigurationError(
+                f"{PUBLIC_ORIGIN_ENV} is only valid with {MODE_ENV}=hosted"
+            )
+        missing = [
+            name
+            for name, value in ((PASSWORD_HASH_ENV, hash_value), (SESSION_SECRET_ENV, secret))
+            if value is None
+        ]
+        if missing:
+            raise WebSecurityConfigurationError(f"{MODE_ENV}=lan requires {', '.join(missing)}")
     else:
         if origin_value is not None:
             raise WebSecurityConfigurationError(
@@ -338,8 +401,9 @@ def expected_origin(request: Request, config: WebSecurityConfig) -> str | None:
     """The one origin allowed to submit mutations.
 
     Hosted mode uses the configured canonical origin and never trusts Host, scheme, or forwarded
-    headers. Local mode derives it from the request, whose Host has already been restricted to the
-    loopback/explicit allow-list, which also defeats DNS-rebinding hosts.
+    headers. Local and LAN modes derive it from the request, whose Host has already been restricted
+    to the loopback/explicit allow-list (plus private IP literals in LAN mode), which also defeats
+    DNS-rebinding host names.
     """
     if config.public_origin is not None:
         return config.public_origin
@@ -370,6 +434,11 @@ def _is_loopback_peer(request: Request) -> bool:
         return ipaddress.ip_address(request.client.host).is_loopback
     except ValueError:
         return False
+
+
+def _is_private_peer(request: Request) -> bool:
+    """The TCP peer is on a private network. LAN serving never trusts forwarded headers."""
+    return request.client is not None and is_private_address(request.client.host)
 
 
 def safe_next_path(value: str | None) -> str:
@@ -531,12 +600,16 @@ async def security_middleware(request: Request, call_next):
     host = request_host(request)
     method = request.method.upper()
     access = classify(method, request.url.path)
-    if host is None or host not in config.allowed_hosts:
+    if not config.allows_host(host):
         response = _reject(400, "Invalid host header.")
         apply_security_headers(response, config, access)
         return response
     if not config.auth_required and not _is_loopback_peer(request):
         response = _reject(403, "This Flipper instance only accepts requests from this computer.")
+        apply_security_headers(response, config, access)
+        return response
+    if config.lan and not _is_private_peer(request):
+        response = _reject(403, "This Flipper instance only accepts private-network requests.")
         apply_security_headers(response, config, access)
         return response
 
