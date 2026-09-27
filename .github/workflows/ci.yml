@@ -23,3 +23,102 @@ jobs:
       - run: ruff format --check .
       - run: pytest
       - run: mkdocs build --strict
+
+  # Build the production image and exercise it with synthetic configuration only. Nothing here
+  # deploys, and no production secret exists in CI.
+  container:
+    runs-on: ubuntu-latest
+    env:
+      ORIGIN: https://flipper.ci.example
+      VOLUME: flipper-ci-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Build production image
+        run: docker build -t flipper:ci .
+      - name: Image contains no data, secrets, tests, or repository metadata
+        run: |
+          docker run --rm --entrypoint sh flipper:ci -c '
+            found="$(find / -xdev \( -name "*.db" -o -name ".env" -o -name "context.md" \
+              -o -name "ebay-seller.json" -o -name "flipper-backup-*" \) -print 2>/dev/null)"
+            test -z "$found" && test ! -e /app/tests && test ! -e /app/.git && test ! -e /app/docs'
+      - name: Refuses to start without a persistent volume
+        run: |
+          set +e
+          docker run --rm flipper:ci
+          test $? -eq 65
+      - name: Refuses to start in hosted mode without secrets
+        run: |
+          set +e
+          docker run --rm -v "$VOLUME:/var/data" flipper:ci
+          test $? -ne 0
+          docker run --rm -v "$VOLUME:/var/data" --entrypoint sh flipper:ci \
+            -c 'test ! -e /var/data/flipper/flipper_inventory.db'
+      - name: Generate synthetic hosted configuration
+        run: |
+          python - <<'EOF'
+          import os, secrets
+          from web.passwords import hash_password
+          password = "ci-synthetic-" + secrets.token_urlsafe(18)
+          temp = os.environ["RUNNER_TEMP"]
+          with open(f"{temp}/synthetic.env", "w") as env:
+              env.write(f"FLIPPER_PASSWORD_HASH={hash_password(password)}\n")
+              env.write(f"FLIPPER_SESSION_SECRET={secrets.token_urlsafe(48)}\n")
+              env.write(f"FLIPPER_PUBLIC_ORIGIN={os.environ['ORIGIN']}\n")
+          with open(f"{temp}/synthetic.pw", "w") as handle:
+              handle.write(password)
+          EOF
+      - name: Start hosted container
+        run: |
+          docker run -d --name flipper --env-file "$RUNNER_TEMP/synthetic.env" \
+            -p 127.0.0.1:10000:10000 -v "$VOLUME:/var/data" flipper:ci
+          for attempt in $(seq 1 30); do
+            curl -fs -o /dev/null -H "Host: flipper.ci.example" http://127.0.0.1:10000/login && exit 0
+            sleep 1
+          done
+          docker logs flipper
+          exit 1
+      - name: Security smoke
+        run: |
+          FLIPPER_SMOKE_PASSWORD="$(cat "$RUNNER_TEMP/synthetic.pw")" \
+            python deploy/smoke.py "$ORIGIN" --connect http://127.0.0.1:10000
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' \
+            http://127.0.0.1:10000/login)" = 400
+      - name: Runs as the unprivileged user
+        run: test "$(docker exec flipper sh -c 'awk "/^Uid:/ {print \$2}" /proc/1/status')" = 10001
+      - name: Data survives restart and container replacement
+        run: |
+          docker exec flipper flipper inventory add --title "CI synthetic item" \
+            --source "ci fixture" --acquired-at 2026-01-01 --cost 1.00
+          printf '%%PDF-1.4\n%% ci synthetic\n' > "$RUNNER_TEMP/synthetic.pdf"
+          docker cp "$RUNNER_TEMP/synthetic.pdf" flipper:/tmp/synthetic.pdf
+          docker exec -u root flipper chmod 644 /tmp/synthetic.pdf
+          docker exec flipper flipper inventory attach Q0001 /tmp/synthetic.pdf
+          before="$(docker exec flipper flipper backup fingerprint | head -1)"
+          docker restart -t 20 flipper
+          sleep 3
+          test "$(docker exec flipper flipper backup fingerprint | head -1)" = "$before"
+          docker rm -f flipper
+          docker run -d --name flipper --env-file "$RUNNER_TEMP/synthetic.env" \
+            -p 127.0.0.1:10000:10000 -v "$VOLUME:/var/data" flipper:ci
+          sleep 3
+          test "$(docker exec flipper flipper backup fingerprint | head -1)" = "$before"
+          docker exec flipper sh -c 'ls /var/data/flipper/attachments | grep -q .'
+      - name: Backup, verify, restore, and verify-restore on the volume
+        run: |
+          docker exec flipper sh -c '
+            set -e
+            flipper backup create --output-dir /var/data/backups --name flipper-backup-ci
+            flipper backup verify /var/data/backups/flipper-backup-ci
+            flipper backup restore /var/data/backups/flipper-backup-ci \
+              --destination /var/data/restore-ci
+            flipper backup verify-restore /var/data/backups/flipper-backup-ci /var/data/restore-ci
+            if flipper backup restore /var/data/backups/flipper-backup-ci \
+              --destination /var/data/flipper; then exit 1; fi'
+      - name: Container logs
+        if: always()
+        run: docker logs flipper 2>&1 | tail -50 || true
