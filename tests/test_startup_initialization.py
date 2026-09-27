@@ -1,13 +1,13 @@
 import sqlite3
 
 import pytest
-from fastapi.testclient import TestClient
 
 import main as cli
 import web.app as web_app
 from inventory.store import CURRENT_SCHEMA_VERSION, InventoryStore
 from storage_config import StorageConfigurationError
 from web.app import app
+from tests.web_client import local_client
 
 
 @pytest.fixture(autouse=True)
@@ -53,14 +53,14 @@ def test_startup_migrates_before_any_request(monkeypatch, tmp_path):
     database = tmp_path / "startup.db"
     monkeypatch.setenv("FLIPPER_INVENTORY_DB", str(database))
 
-    with TestClient(app):
+    with local_client(app):
         assert _versions(database) == list(range(1, CURRENT_SCHEMA_VERSION + 1))
 
 
 def test_data_directory_selects_startup_database(monkeypatch, tmp_path):
     monkeypatch.setenv("FLIPPER_DATA_DIR", str(tmp_path / "data"))
 
-    with TestClient(app) as client:
+    with local_client(app) as client:
         assert client.get("/inventory").status_code == 200
 
     assert _versions(tmp_path / "data" / "flipper_inventory.db")[-1] == CURRENT_SCHEMA_VERSION
@@ -78,7 +78,7 @@ def test_requests_after_startup_never_repeat_schema_initialization(monkeypatch, 
     )
     initializations.clear()
 
-    with TestClient(app) as client:
+    with local_client(app) as client:
         assert len(initializations) == 1
         statements.clear()
         for path in ("/", "/inventory", "/inventory/Q0001", "/sales", "/insights", "/"):
@@ -102,7 +102,7 @@ def test_mutations_keep_their_own_transactions_after_startup(monkeypatch, tmp_pa
     )
     initializations.clear()
 
-    with TestClient(app) as client:
+    with local_client(app) as client:
         statements.clear()
         response = client.post(
             "/inventory/Q0001/notes",
@@ -120,7 +120,7 @@ def test_mutations_keep_their_own_transactions_after_startup(monkeypatch, tmp_pa
 def test_first_request_without_lifespan_initializes_once(monkeypatch, tmp_path, traced):
     _, initializations = traced
     monkeypatch.setenv("FLIPPER_INVENTORY_DB", str(tmp_path / "lazy.db"))
-    client = TestClient(app)
+    client = local_client(app)
 
     for _ in range(3):
         assert client.get("/inventory").status_code == 200
@@ -132,7 +132,7 @@ def test_invalid_storage_configuration_prevents_startup(monkeypatch):
     monkeypatch.setenv("FLIPPER_DATA_DIR", "relative/data")
 
     with pytest.raises(StorageConfigurationError):
-        with TestClient(app):
+        with local_client(app):
             pass
 
 
@@ -141,7 +141,7 @@ def test_invalid_credential_backend_prevents_startup(monkeypatch, tmp_path):
     monkeypatch.setenv("FLIPPER_CREDENTIAL_BACKEND", "vault")
 
     with pytest.raises(StorageConfigurationError):
-        with TestClient(app):
+        with local_client(app):
             pass
 
 
@@ -155,11 +155,11 @@ def test_migration_failure_prevents_startup_and_is_not_cached(monkeypatch, tmp_p
     monkeypatch.setenv("FLIPPER_INVENTORY_DB", str(database))
 
     with pytest.raises(RuntimeError, match="newer than this Flipper version"):
-        with TestClient(app):
+        with local_client(app):
             pass
 
     assert web_app._initialized_databases == set()
-    assert TestClient(app).get("/inventory").status_code == 503
+    assert local_client(app).get("/inventory").status_code == 503
 
 
 def test_web_attachment_root_follows_shared_configuration(monkeypatch, tmp_path):

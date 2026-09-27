@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from fastapi.testclient import TestClient
 from keyring.errors import KeyringError
 
 from inventory.store import InventoryStore
@@ -10,12 +9,13 @@ from ebay.listings import EbayActiveListing
 from ebay.orders import EbayOrder, EbayOrderLineItem, Money, OrderPricingSummary
 import web.app as web_app
 from web.app import app
+from tests.web_client import local_client
 
 
 def _client(monkeypatch, tmp_path):
     database = tmp_path / "web.db"
     monkeypatch.setenv("FLIPPER_INVENTORY_DB", str(database))
-    return TestClient(app), InventoryStore(database)
+    return local_client(app), InventoryStore(database)
 
 
 def _sold(
@@ -264,11 +264,8 @@ def test_shared_shell_brand_favicon_navigation_and_active_state(monkeypatch, tmp
     assert response.status_code == 200
     assert favicon.status_code == 200
     assert favicon.headers["content-type"] == "image/png"
-    assert (
-        'rel="icon" type="image/png" href="http://testserver/static/flipper-logo2.png"'
-        in response.text
-    )
-    assert '<img src="http://testserver/static/flipper-logo2.png"' in response.text
+    assert 'rel="icon" type="image/png" href="/static/flipper-logo2.png"' in response.text
+    assert '<img src="/static/flipper-logo2.png"' in response.text
     assert 'aria-label="Primary"' in response.text
     assert 'class="active" href="/inventory" aria-current="page"' in response.text
     for path in (

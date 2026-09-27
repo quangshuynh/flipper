@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from uuid import uuid4
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode
 
 from fastapi import HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import pass_context
 from dotenv import load_dotenv
+from starlette.concurrency import run_in_threadpool
 from starlette.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -86,11 +87,23 @@ from reports.service import (
     valuation_accuracy_report,
 )
 from storage_config import StorageConfig, resolve_storage
+from web import security as web_security
+from web.passwords import verify_password
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 templates = Jinja2Templates(directory=ROOT / "web" / "templates")
+
+# The private web app has no API clients, so FastAPI's generated schema and interactive docs are
+# dropped rather than exposed. The standalone `ebay.compliance:app` entry point is unaffected.
+_FRAMEWORK_DOC_PATHS = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+app.openapi_url = app.docs_url = app.redoc_url = app.swagger_ui_oauth2_redirect_url = None
+app.router.routes[:] = [
+    route for route in app.router.routes if getattr(route, "path", None) not in _FRAMEWORK_DOC_PATHS
+]
 app.mount("/static", StaticFiles(directory=ROOT / "web" / "static"), name="static")
+# One central, deny-by-default boundary in front of every route; see web/security.py.
+app.middleware("http")(web_security.security_middleware)
 research_store = EphemeralResearchStore()
 RESEARCH_COOKIE = "flipper_research"
 
@@ -125,7 +138,8 @@ _base_lifespan = app.router.lifespan_context
 
 @asynccontextmanager
 async def _lifespan(application):
-    """Refuse to start serving unless storage configuration and migrations succeed."""
+    """Refuse to start unless security, storage configuration, and migrations all succeed."""
+    web_security.current_config()
     initialize_storage()
     async with _base_lifespan(application) as state:
         yield state
@@ -364,21 +378,24 @@ def _safe_discovery_error(exc: Exception) -> str:
     return "eBay discovery is temporarily unavailable. Try again later."
 
 
-async def _post_fields(request: Request) -> dict[str, str]:
-    """Parse small URL-encoded local forms without introducing multipart handling."""
+async def _post_fields(request: Request, *, strip: bool = True) -> dict[str, str]:
+    """Parse small URL-encoded local forms without introducing multipart handling.
+
+    Same-origin and authentication checks have already run in the security middleware before
+    any route is reached, so this only validates encoding and size.
+    """
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type != "application/x-www-form-urlencoded":
         raise HTTPException(status_code=415, detail="Unsupported form encoding")
-    origin = request.headers.get("origin")
-    if origin:
-        parsed = urlsplit(origin)
-        if parsed.scheme not in {"http", "https"} or parsed.netloc != request.url.netloc:
-            raise HTTPException(status_code=403, detail="Cross-origin mutation rejected")
     raw = await request.body()
     if len(raw) > 16_384:
         raise HTTPException(status_code=413, detail="Form is too large")
     values = parse_qs(raw.decode("utf-8", errors="strict"), keep_blank_values=True)
-    return {key: entries[-1].strip() for key, entries in values.items() if entries}
+    return {
+        key: entries[-1].strip() if strip else entries[-1]
+        for key, entries in values.items()
+        if entries
+    }
 
 
 def _redirect(path: str, **params: str) -> RedirectResponse:
@@ -544,6 +561,73 @@ async def web_http_error(request: Request, exc: StarletteHTTPException):
         message=message,
         status_code=exc.status_code,
     )
+
+
+_password_verification_lock = threading.Lock()
+
+
+def _verify_owner_password(config: web_security.WebSecurityConfig, password: str) -> bool:
+    """Run one scrypt verification at a time to bound CPU and memory under login floods."""
+    assert config.password_hash is not None
+    with _password_verification_lock:
+        return verify_password(password, config.password_hash)
+
+
+def _render_login(request: Request, next_path: str, error: str | None = None, status_code=200):
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"title": "Sign in", "next_path": next_path, "error": error},
+        status_code=status_code,
+    )
+
+
+@app.get(web_security.LOGIN_PATH, response_class=HTMLResponse)
+def login_page(request: Request, next: str = ""):
+    next_path = web_security.safe_next_path(next)
+    if not request.state.auth_enabled or request.state.signed_in:
+        return RedirectResponse(next_path, status_code=303)
+    return _render_login(request, next_path)
+
+
+@app.post(web_security.LOGIN_PATH)
+async def login_submit(request: Request):
+    config = web_security.current_config()
+    if not config.auth_required:
+        return RedirectResponse("/", status_code=303)
+    fields = await _post_fields(request, strip=False)
+    next_path = web_security.safe_next_path(fields.get("next"))
+    throttle = web_security.login_throttle
+    key = web_security.throttle_key(request)
+    wait = throttle.retry_after(key)
+    if wait > 0:
+        response = _render_login(
+            request,
+            next_path,
+            "Too many sign-in attempts. Wait a few minutes, then try again.",
+            status_code=429,
+        )
+        response.headers["Retry-After"] = str(max(1, int(wait + 0.999)))
+        return response
+    # Unstripped, so the password verifies exactly as it was typed when hashed.
+    password = fields.get("password", "")
+    if not await run_in_threadpool(_verify_owner_password, config, password):
+        throttle.record_failure(key)
+        return _render_login(request, next_path, "Incorrect password.", status_code=401)
+    throttle.record_success(key)
+    codec = config.session_codec()
+    response = RedirectResponse(next_path, status_code=303)
+    web_security.set_session_cookie(response, config, codec, codec.issue())
+    return response
+
+
+@app.post(web_security.LOGOUT_PATH)
+async def logout(request: Request):
+    """Clear this browser's session. Reaching here already required a session and same origin."""
+    response = RedirectResponse(web_security.LOGIN_PATH, status_code=303)
+    web_security.clear_session_cookie(response, web_security.current_config())
+    response.headers["Clear-Site-Data"] = '"cache"'
+    return response
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1051,7 +1135,13 @@ async def manual_opportunity_add(request: Request):
     except (KeyError, TypeError, ValueError) as exc:
         return _redirect("/deals/opportunities/new", error_message=str(exc))
     response = _redirect(f"/deals/opportunities/{opportunity_id}", message="Opportunity added.")
-    response.set_cookie(RESEARCH_COOKIE, session_id, httponly=True, samesite="strict")
+    response.set_cookie(
+        RESEARCH_COOKIE,
+        session_id,
+        httponly=True,
+        samesite="strict",
+        secure=request.state.secure_cookies,
+    )
     return response
 
 
@@ -1393,7 +1483,13 @@ async def comparable_add(request: Request, item_id: str):
     except (KeyError, TypeError, ValueError) as exc:
         return _redirect(f"/deals/ebay/{item_id}", error_message=str(exc))
     response = _redirect(f"/deals/ebay/{item_id}", message="Comparable added.")
-    response.set_cookie(RESEARCH_COOKIE, session_id, httponly=True, samesite="strict")
+    response.set_cookie(
+        RESEARCH_COOKIE,
+        session_id,
+        httponly=True,
+        samesite="strict",
+        secure=request.state.secure_cookies,
+    )
     return response
 
 

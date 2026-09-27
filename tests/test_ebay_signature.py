@@ -4,7 +4,6 @@ import json
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from fastapi.testclient import TestClient
 
 from ebay.compliance import ACCOUNT_DELETION_PATH, app
 from ebay.signature_verifier import (
@@ -13,6 +12,7 @@ from ebay.signature_verifier import (
     PublicKeyRetrievalError,
     SignatureFormatError,
 )
+from tests.web_client import local_client
 
 
 KEY_ID = "test-key-id"
@@ -20,7 +20,7 @@ NOTIFICATION = {
     "metadata": {"topic": "MARKETPLACE_ACCOUNT_DELETION", "schemaVersion": "1.0"},
     "notification": {"notificationId": "test-notification", "data": {}},
 }
-client = TestClient(app)
+client = local_client(app)
 
 
 def public_key_document(private_key):

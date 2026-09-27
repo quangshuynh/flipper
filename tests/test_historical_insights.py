@@ -1,12 +1,12 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from fastapi.testclient import TestClient
 
 from inventory.store import RECONCILIATION_CATEGORIES, InventoryStore
 from reports.service import historical_insights
 import web.app as web_app
 from web.app import app
+from tests.web_client import local_client
 
 
 def _sell(
@@ -172,7 +172,7 @@ def test_insights_web_empty_partial_complete_and_safe_ranges(monkeypatch, tmp_pa
     database = tmp_path / "web.db"
     monkeypatch.setenv("FLIPPER_INVENTORY_DB", str(database))
     monkeypatch.setattr(web_app, "_today", lambda: date(2026, 9, 17))
-    client = TestClient(app)
+    client = local_client(app)
     store = InventoryStore(database)
 
     empty = client.get("/insights")

@@ -1,13 +1,13 @@
 import hashlib
 
-from fastapi.testclient import TestClient
 
 from ebay.compliance import ACCOUNT_DELETION_PATH, app, create_challenge_response
+from tests.web_client import local_client
 
 
 TOKEN = "test_verification_token_32_chars_minimum"
 ENDPOINT = "https://flipper.example.com/api/ebay/account-deletion"
-client = TestClient(app)
+client = local_client(app)
 
 
 def configure_endpoint(monkeypatch):
