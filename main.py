@@ -2,13 +2,15 @@
 
 import argparse
 import os
+import secrets
 import sqlite3
 import sys
+import warnings
 import webbrowser
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from getpass import getpass
+from getpass import GetPassWarning, getpass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -83,6 +85,7 @@ from reports.service import (
 from sales.economics import EconomicComponent, calculate_sale_economics
 from storage_config import StorageConfigurationError, resolve_storage
 from utils.dedupe import init_db, has_seen, mark_seen
+from web.passwords import PasswordPolicyError, hash_password
 
 
 EBAY_NOW_SAFETY_MARGIN = timedelta(minutes=5)
@@ -592,6 +595,17 @@ def build_parser() -> argparse.ArgumentParser:
             "--to", dest="end", type=_parse_date, help="inclusive date (YYYY-MM-DD)"
         )
     report_commands.add_parser("valuation", help="show baseline estimate accuracy")
+    auth = commands.add_parser(
+        "auth", help="generate web sign-in configuration values (never stored by Flipper)"
+    )
+    auth_commands = auth.add_subparsers(dest="auth_command", required=True)
+    auth_commands.add_parser(
+        "hash-password",
+        help="prompt for the owner password without echo and print FLIPPER_PASSWORD_HASH",
+    )
+    auth_commands.add_parser(
+        "session-secret", help="print a new random FLIPPER_SESSION_SECRET value"
+    )
     backup = commands.add_parser(
         "backup", help="create, verify, and restore local database + attachment backups"
     )
@@ -1468,6 +1482,40 @@ def _print_verification(result, label: str) -> int:
     return _VERIFY_EXIT_CODES[result.status]
 
 
+def _read_new_password() -> str:
+    """Prompt twice without echo; refuse to run where the terminal would echo the password."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", GetPassWarning)
+        password = getpass("New Flipper owner password: ")
+        confirmation = getpass("Confirm owner password: ")
+    if password != confirmation:
+        raise PasswordPolicyError("passwords do not match")
+    return password
+
+
+def run_auth_command(args: argparse.Namespace) -> int:
+    """Print configuration values for the host environment; nothing is written or logged."""
+    if args.auth_command == "session-secret":
+        print(secrets.token_urlsafe(48))
+        return 0
+    try:
+        encoded = hash_password(_read_new_password())
+    except GetPassWarning:
+        print(
+            "Error: an interactive terminal is required so the password is not echoed",
+            file=sys.stderr,
+        )
+        return 1
+    except (EOFError, KeyboardInterrupt):
+        print("\nError: password entry was cancelled", file=sys.stderr)
+        return 1
+    except PasswordPolicyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(encoded)
+    return 0
+
+
 def run_backup_command(args: argparse.Namespace) -> int:
     """Backups never migrate, repoint, or modify the configured authoritative database."""
     try:
@@ -1578,6 +1626,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_reports_command(args)
     if args.command == "backup":
         return run_backup_command(args)
+    if args.command == "auth":
+        return run_auth_command(args)
     run()
     return 0
 
