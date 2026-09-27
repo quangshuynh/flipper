@@ -3,7 +3,7 @@
   {% if values %}{% for currency, amount in values|dictsort %}{{ amount|money(currency) }}{% if not loop.last %}<br>{% endif %}{% endfor %}{% else %}Unavailable{% endif %}
 {%- endmacro %}
 {% macro insight_table(title, groups) -%}
-<section class="panel table-wrap">
+<section class="panel table-wrap" tabindex="0" aria-label="{{ title }} table">
   <h2>{{ title }}</h2>
   {% if groups %}
   <table>
