@@ -85,6 +85,7 @@ from reports.service import (
 from sales.economics import EconomicComponent, calculate_sale_economics
 from storage_config import StorageConfigurationError, resolve_storage
 from utils.dedupe import init_db, has_seen, mark_seen
+from web import lan as web_lan
 from web.passwords import PasswordPolicyError, hash_password
 
 
@@ -341,6 +342,20 @@ def _print_finance_import(transactions: list[FinanceTransaction], store: Invento
         result.status in {FinanceImportStatus.CONFLICT, FinanceImportStatus.REJECTED}
         for result in results
     )
+
+
+def _parse_port(value: str) -> int:
+    try:
+        return web_lan.parse_port(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _parse_bind(value: str) -> str:
+    try:
+        return web_lan.parse_bind(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _parse_date(value: str) -> datetime:
@@ -605,6 +620,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auth_commands.add_parser(
         "session-secret", help="print a new random FLIPPER_SESSION_SECRET value"
+    )
+    web = commands.add_parser("web", help="serve the web app beyond this computer")
+    web_commands = web.add_subparsers(dest="web_command", required=True)
+    web_lan_parser = web_commands.add_parser(
+        "lan",
+        help="serve Flipper to a phone on this trusted private network (sign-in required)",
+        description=(
+            "Expose Flipper to devices on this computer's private network over plain HTTP. "
+            "Requires FLIPPER_PASSWORD_HASH. Not for public Wi-Fi, port forwarding, or the "
+            "Internet. Ordinary `uvicorn web.app:app` stays on this computer only."
+        ),
+    )
+    web_lan_parser.add_argument(
+        "--port",
+        type=_parse_port,
+        default=web_lan.DEFAULT_PORT,
+        help=f"TCP port (default {web_lan.DEFAULT_PORT})",
+    )
+    web_lan_parser.add_argument(
+        "--bind",
+        type=_parse_bind,
+        default=web_lan.ALL_INTERFACES,
+        help="one private IPv4 address of this computer to listen on (default: all interfaces)",
     )
     backup = commands.add_parser(
         "backup", help="create, verify, and restore local database + attachment backups"
@@ -1516,6 +1554,16 @@ def run_auth_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_web_command(args: argparse.Namespace) -> int:
+    """Serve on the private network; storage resolves exactly as the web app resolves it."""
+    try:
+        web_lan.serve(args.port, args.bind)
+    except web_lan.LanStartupError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def run_backup_command(args: argparse.Namespace) -> int:
     """Backups never migrate, repoint, or modify the configured authoritative database."""
     try:
@@ -1628,6 +1676,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_backup_command(args)
     if args.command == "auth":
         return run_auth_command(args)
+    if args.command == "web":
+        return run_web_command(args)
     run()
     return 0
 
