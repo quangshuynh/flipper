@@ -71,11 +71,11 @@ from reports.service import (
     valuation_accuracy_report,
 )
 from sales.economics import EconomicComponent, calculate_sale_economics
+from storage_config import StorageConfigurationError, resolve_storage
 from utils.dedupe import init_db, has_seen, mark_seen
 
 
 EBAY_NOW_SAFETY_MARGIN = timedelta(minutes=5)
-INVENTORY_DB_PATH = "data/flipper_inventory.db"
 
 
 def run() -> None:
@@ -388,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     acquire.add_argument("--source", help="actual acquisition source; defaults to listing source")
     acquire.add_argument("--notes", default="")
-    acquire.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    acquire.add_argument("--database", default=None, help=argparse.SUPPRESS)
     deals = commands.add_parser("deals", help="analyze source-neutral deal economics")
     deal_commands = deals.add_subparsers(dest="deals_command", required=True)
     deal_analyze = deal_commands.add_parser(
@@ -436,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reconcile.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
     reconcile.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
-    reconcile.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    reconcile.add_argument("--database", default=None, help=argparse.SUPPRESS)
     import_sales = ebay_commands.add_parser(
         "import-sales", help="persist deterministically matched order lines as sales"
     )
@@ -444,13 +444,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)"
     )
     import_sales.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
-    import_sales.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    import_sales.add_argument("--database", default=None, help=argparse.SUPPRESS)
     finances = ebay_commands.add_parser(
         "finances", help="show read-only seller financial transactions"
     )
     finances.add_argument("--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)")
     finances.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
-    finances.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    finances.add_argument("--database", default=None, help=argparse.SUPPRESS)
     import_finances = ebay_commands.add_parser(
         "import-finances", help="import supported matched Finances costs into local sales"
     )
@@ -458,15 +458,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--from", dest="start", type=_parse_date, help="start date (YYYY-MM-DD)"
     )
     import_finances.add_argument("--to", dest="end", type=_parse_date, help="end date (YYYY-MM-DD)")
-    import_finances.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    import_finances.add_argument("--database", default=None, help=argparse.SUPPRESS)
     listings = ebay_commands.add_parser(
         "listings", help="show active seller listings and local reconciliation"
     )
-    listings.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    listings.add_argument("--database", default=None, help=argparse.SUPPRESS)
     sync_listings = ebay_commands.add_parser(
         "sync-listings", help="explicitly sync safe matched listings to local inventory"
     )
-    sync_listings.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    sync_listings.add_argument("--database", default=None, help=argparse.SUPPRESS)
     import_listing = ebay_commands.add_parser(
         "import-listing", help="adopt one missing-local listing; unknown history may be omitted"
     )
@@ -476,9 +476,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--acquired-at", help="actual acquisition date (YYYY-MM-DD), if known"
     )
     import_listing.add_argument("--cost", help="actual acquisition cost in USD, if known")
-    import_listing.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    import_listing.add_argument("--database", default=None, help=argparse.SUPPRESS)
     inventory = commands.add_parser("inventory", help="manage local inventory")
-    inventory.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    inventory.add_argument("--database", default=None, help=argparse.SUPPRESS)
     inventory.add_argument("--attachment-root", help=argparse.SUPPRESS)
     inventory_commands = inventory.add_subparsers(dest="inventory_command", required=True)
     add = inventory_commands.add_parser("add", help="record an acquired item")
@@ -540,7 +540,7 @@ def build_parser() -> argparse.ArgumentParser:
     attach_valuation.add_argument("--deal-score", type=int, required=True)
     attach_valuation.add_argument("--pricing-method", default="component-estimator")
     sales = commands.add_parser("sales", help="inspect imported local sales")
-    sales.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    sales.add_argument("--database", default=None, help=argparse.SUPPRESS)
     sales_commands = sales.add_subparsers(dest="sales_command", required=True)
     sales_commands.add_parser("list", help="list imported sales")
     sale_show = sales_commands.add_parser("show", help="show one imported sale")
@@ -567,7 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
     unconfirm.add_argument("sale_id")
     unconfirm.add_argument("--category", choices=RECONCILIATION_CATEGORIES, required=True)
     reports = commands.add_parser("reports", help="show local reseller business reports")
-    reports.add_argument("--database", default=INVENTORY_DB_PATH, help=argparse.SUPPRESS)
+    reports.add_argument("--database", default=None, help=argparse.SUPPRESS)
     report_commands = reports.add_subparsers(dest="report_command", required=True)
     for name, help_text in (
         ("summary", "show inventory and realized-economics summary"),
@@ -931,7 +931,10 @@ def run_ebay_command(args: argparse.Namespace) -> int:
             ).strip()
             code = oauth.parse_redirect(redirected_url, state)
             oauth.exchange_code(code)
-            print("eBay seller account connected. Refresh token stored in the OS credential store.")
+            print(
+                "eBay seller account connected. "
+                "Refresh token stored in the configured credential store."
+            )
             return 0
         if args.ebay_command == "disconnect":
             if oauth.disconnect():
@@ -1396,9 +1399,29 @@ def run_reports_command(args: argparse.Namespace) -> int:
         return 1
 
 
+def _resolve_storage_arguments(args: argparse.Namespace) -> None:
+    """Fill unset storage flags from shared configuration; explicit flags always win.
+
+    Without configuration the database remains the working-directory-relative
+    ``data/flipper_inventory.db`` and attachments remain beside it.
+    """
+    if not hasattr(args, "database") and not hasattr(args, "attachment_root"):
+        return
+    storage = resolve_storage()
+    if getattr(args, "database", "") is None:
+        args.database = str(storage.inventory_database)
+    if getattr(args, "attachment_root", "") is None and storage.attachment_root is not None:
+        args.attachment_root = str(storage.attachment_root)
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = build_parser().parse_args(argv)
+    try:
+        _resolve_storage_arguments(args)
+    except StorageConfigurationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     if args.command == "acquire":
         return run_acquisition_command(args)
     if args.command == "deals":
