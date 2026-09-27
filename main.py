@@ -14,6 +14,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from acquisition import acquire_from_analysis, analyze_listing
+from backup.fingerprint import FINGERPRINT_ALGORITHM, database_state
+from backup.service import (
+    BackupError,
+    BackupStatus,
+    RestoreError,
+    create_backup,
+    restore_backup,
+    verify_backup,
+    verify_restored,
+)
 from collectors.json_feed_collector import DEFAULT_JSON_PATH, fetch_listings
 from deals.categories import normalize_category
 from deals.comparables import Comparable, ComparableCondition, ComparableEvidenceSet, ComparableType
@@ -582,6 +592,43 @@ def build_parser() -> argparse.ArgumentParser:
             "--to", dest="end", type=_parse_date, help="inclusive date (YYYY-MM-DD)"
         )
     report_commands.add_parser("valuation", help="show baseline estimate accuracy")
+    backup = commands.add_parser(
+        "backup", help="create, verify, and restore local database + attachment backups"
+    )
+    backup.add_argument("--database", default=None, help=argparse.SUPPRESS)
+    backup.add_argument("--attachment-root", help=argparse.SUPPRESS)
+    backup_commands = backup.add_subparsers(dest="backup_command", required=True)
+    backup_create = backup_commands.add_parser(
+        "create", help="capture a verified backup of the configured database and attachments"
+    )
+    backup_create.add_argument(
+        "--output-dir",
+        required=True,
+        help="directory to hold the new backup; must be outside the data being backed up",
+    )
+    backup_create.add_argument("--name", help="backup directory name (default: timestamped)")
+    backup_verify = backup_commands.add_parser(
+        "verify", help="independently verify a backup without the source database"
+    )
+    backup_verify.add_argument("backup_path", help="backup directory")
+    backup_restore = backup_commands.add_parser(
+        "restore", help="restore a verified backup into a new directory"
+    )
+    backup_restore.add_argument("backup_path", help="backup directory")
+    backup_restore.add_argument(
+        "--destination", required=True, help="new directory to create (must not exist)"
+    )
+    backup_verify_restore = backup_commands.add_parser(
+        "verify-restore", help="prove a restored directory is equivalent to its backup"
+    )
+    backup_verify_restore.add_argument("backup_path", help="backup directory")
+    backup_verify_restore.add_argument("restored_path", help="restored data directory")
+    backup_fingerprint = backup_commands.add_parser(
+        "fingerprint", help="print the read-only logical fingerprint of a database"
+    )
+    backup_fingerprint.add_argument(
+        "database_path", nargs="?", help="database file (default: configured database)"
+    )
     return parser
 
 
@@ -1399,6 +1446,101 @@ def run_reports_command(args: argparse.Namespace) -> int:
         return 1
 
 
+_VERIFY_EXIT_CODES = {
+    BackupStatus.VALID: 0,
+    BackupStatus.INVALID: 1,
+    BackupStatus.UNSUPPORTED_FORMAT: 3,
+    BackupStatus.NEWER_SCHEMA: 4,
+}
+
+
+def _print_verification(result, label: str) -> int:
+    if result.ok:
+        manifest = result.manifest
+        print(f"{label}: valid")
+        print(f"  Schema version: v{manifest['flipper_schema_version']}")
+        print(f"  Logical fingerprint: {manifest['logical_fingerprint']['sha256']}")
+        print(f"  Attachments: {manifest['attachments']['count']}")
+    else:
+        print(f"{label}: {result.status.value}")
+        for problem in result.problems:
+            print(f"  - {problem}")
+    return _VERIFY_EXIT_CODES[result.status]
+
+
+def run_backup_command(args: argparse.Namespace) -> int:
+    """Backups never migrate, repoint, or modify the configured authoritative database."""
+    try:
+        if args.backup_command == "create":
+            result = create_backup(
+                args.database,
+                args.output_dir,
+                attachment_root=args.attachment_root,
+                name=args.name,
+            )
+            manifest = result.manifest
+            print(f"Created verified backup: {result.path}")
+            print(f"  Schema version: v{manifest['flipper_schema_version']}")
+            print(f"  Logical fingerprint: {manifest['logical_fingerprint']['sha256']}")
+            counters = manifest["counters"]
+            print(
+                f"  Counters: Q {counters['q_number']} | S {counters['s_number']} | "
+                f"C {counters['c_number']}"
+            )
+            attachments = manifest["attachments"]
+            print(f"  Attachments: {attachments['count']} ({attachments['total_bytes']} bytes)")
+            print("  Credentials and secrets: excluded")
+            if result.unreferenced_files:
+                print(
+                    f"  Not backed up: {len(result.unreferenced_files)} file(s) in the attachment "
+                    "directory that the database does not reference (left untouched):"
+                )
+                for name in result.unreferenced_files:
+                    print(f"    {name}")
+            return 0
+        if args.backup_command == "verify":
+            return _print_verification(verify_backup(args.backup_path), "Backup")
+        if args.backup_command == "verify-restore":
+            result = verify_restored(args.backup_path, args.restored_path)
+            code = _print_verification(result, "Restored data")
+            if result.ok:
+                print("Restored data is logically equivalent to the backup.")
+            return code
+        if args.backup_command == "restore":
+            result = restore_backup(
+                args.backup_path,
+                args.destination,
+                active_database=args.database,
+                active_attachment_root=args.attachment_root,
+            )
+            manifest = result.manifest
+            print(f"Restored backup into new directory: {result.destination}")
+            print(f"  Logical fingerprint verified: {manifest['logical_fingerprint']['sha256']}")
+            print(f"  Attachments verified: {manifest['attachments']['count']}")
+            print(
+                "  Flipper configuration was not changed; point FLIPPER_DATA_DIR at this "
+                "directory only when you intend it to become the single authoritative copy."
+            )
+            return 0
+        state = database_state(args.database_path or args.database)
+        print(f"Logical fingerprint ({FINGERPRINT_ALGORITHM}): {state.fingerprint}")
+        print(f"  Schema version: v{state.schema_version}")
+        counters = state.counters
+        print(
+            f"  Counters: Q {counters['q_number']} | S {counters['s_number']} | "
+            f"C {counters['c_number']}"
+        )
+        for table, count in sorted(state.table_row_counts.items()):
+            print(f"  {table}: {count}")
+        return 0
+    except FileNotFoundError:
+        print("Error: database file does not exist", file=sys.stderr)
+        return 1
+    except (BackupError, RestoreError, ValueError, OSError, sqlite3.Error) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
 def _resolve_storage_arguments(args: argparse.Namespace) -> None:
     """Fill unset storage flags from shared configuration; explicit flags always win.
 
@@ -1434,6 +1576,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_sales_command(args)
     if args.command == "reports":
         return run_reports_command(args)
+    if args.command == "backup":
+        return run_backup_command(args)
     run()
     return 0
 
