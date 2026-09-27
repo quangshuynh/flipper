@@ -18,6 +18,7 @@ Configuration comes from environment variables and optional `.env`; never commit
 | Setting family | Role |
 | --- | --- |
 | `FLIPPER_*` storage settings | Writable data and credential locations; see below |
+| `FLIPPER_*` web security settings | Sign-in, session, origin, and host settings; see below |
 | `GROQ_API_KEY` | Optional Groq-compatible analysis enrichment |
 | `EBAY_OAUTH_TOKEN` | Optional legacy eBay asking-price lookup |
 | `DISCORD_WEBHOOK_URL` | Optional alerts |
@@ -61,6 +62,21 @@ Invalid storage settings, such as a relative `FLIPPER_DATA_DIR` or an unknown cr
 stop the web app at startup and make CLI storage commands exit with an error. Resolving settings
 never creates, moves, or copies files. The CLI-only analyzer caches (`data/flipper_seen.db` and
 `data/part_prices.db`) are disposable and are not affected by these settings.
+
+## Web security
+
+| Variable | Meaning |
+| --- | --- |
+| `FLIPPER_WEB_SECURITY_MODE` | `local` (default) or `hosted` |
+| `FLIPPER_PASSWORD_HASH` | Encoded owner-password hash from `python main.py auth hash-password` |
+| `FLIPPER_SESSION_SECRET` | Session-signing secret from `python main.py auth session-secret` |
+| `FLIPPER_PUBLIC_ORIGIN` | Canonical `https://` origin; required in hosted mode, rejected otherwise |
+| `FLIPPER_ALLOWED_HOSTS` | Optional extra comma-separated trusted host names |
+
+With nothing set, the web app runs in local mode and serves only this computer, as before. Hosted
+mode refuses to start unless the hash, secret, and public origin are all valid. Configuring only
+one of the hash and the secret stops startup in either mode. These values are never stored in
+SQLite or backups. See [Web security](../operations/web-security.md).
 
 ### File credential backend
 

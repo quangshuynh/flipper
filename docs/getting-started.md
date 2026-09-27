@@ -38,6 +38,12 @@ Open `http://127.0.0.1:8000`. Set `FLIPPER_INVENTORY_DB` to select another local
 migrates that database once at startup and refuses to start if that fails. Use a copy when
 experimenting.
 
+By default the web app runs in local mode without a password and answers only requests from this
+computer. To require sign-in, generate an owner-password hash and a session secret with
+`python main.py auth hash-password` and `python main.py auth session-secret` and set both. See
+[Web security](operations/web-security.md), which also covers the hosted mode required before any
+internet exposure.
+
 Open `/deals` to run an explicit, read-only eBay discovery search when application credentials and
 production access are configured. The dashboard and other local pages do not trigger discovery.
 
