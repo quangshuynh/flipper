@@ -101,13 +101,20 @@ PUBLIC_ROUTES = frozenset(
     }
 )
 AUTHENTICATION_ROUTES = frozenset({("GET", LOGIN_PATH), ("POST", LOGIN_PATH)})
+# The web app manifest is public because browsers fetch it without cookies. It names Flipper and
+# its icon only; it holds no data, and no service worker is registered.
 PUBLIC_STATIC_ASSETS = frozenset(
-    {"/static/app.css", "/static/operational.css", "/static/flipper-logo2.png"}
+    {
+        "/static/app.css",
+        "/static/operational.css",
+        "/static/flipper-logo2.png",
+        "/static/manifest.webmanifest",
+    }
 )
 
 CONTENT_SECURITY_POLICY = (
-    "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; "
-    "frame-ancestors 'none'; base-uri 'none'"
+    "default-src 'none'; style-src 'self'; img-src 'self'; manifest-src 'self'; "
+    "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
 )
 HSTS_VALUE = "max-age=31536000"
 _HOSTNAME = re.compile(

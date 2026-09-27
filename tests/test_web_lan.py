@@ -1,5 +1,6 @@
 """Private-network (LAN) mode: explicit launch, mandatory sign-in, and a private-only boundary."""
 
+import json
 import os
 import re
 import socket
@@ -572,3 +573,46 @@ def test_cli_reports_startup_errors_without_serving(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "auth hash-password" in captured.err and captured.out == ""
 
+
+# Home-screen metadata
+
+
+def test_manifest_is_public_minimal_and_same_origin(lan):
+    response = lan.client.get("/static/manifest.webmanifest")
+    assert response.status_code == 200
+    assert "no-store" not in response.headers.get("cache-control", "")
+    manifest = json.loads(response.text)
+    assert manifest["name"] == manifest["short_name"] == "Flipper"
+    assert manifest["start_url"] == manifest["scope"] == "/"
+    assert manifest["display"] == "standalone"
+    assert set(manifest) <= {
+        "name",
+        "short_name",
+        "description",
+        "id",
+        "start_url",
+        "scope",
+        "display",
+        "background_color",
+        "theme_color",
+        "icons",
+    }
+    for icon in manifest["icons"]:
+        assert icon["src"] in web_security.PUBLIC_STATIC_ASSETS
+        assert lan.client.get(icon["src"]).status_code == 200
+
+
+def test_pages_link_the_manifest_and_icon_without_a_service_worker(lan):
+    login = lan.client.get("/login").text
+    assert _sign_in(lan.client).status_code == 303
+    dashboard = lan.client.get("/").text
+    for page in (login, dashboard):
+        assert '<link rel="manifest" href="/static/manifest.webmanifest">' in page
+        assert '<link rel="apple-touch-icon" href="/static/flipper-logo2.png">' in page
+        assert 'name="viewport" content="width=device-width, initial-scale=1"' in page
+    assert "manifest-src 'self'" in web_security.CONTENT_SECURITY_POLICY
+    web_root = web_app.ROOT / "web"
+    assert not list(web_root.rglob("*.js"))
+    for path in web_root.rglob("*"):
+        if path.is_file() and path.suffix in {".html", ".css", ".webmanifest"}:
+            assert "serviceWorker" not in path.read_text(encoding="utf-8"), path
