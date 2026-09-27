@@ -6,7 +6,7 @@
 <label>Source<select name="source" required>{% for source in sources %}<option value="{{ source.value }}">{{ source.value|replace('-', ' ')|title }}</option>{% endfor %}</select></label>
 <label>Title<input name="title" required maxlength="300"></label>
 <label>Category<select name="category" required>{% for category in categories %}<option value="{{ category.slug }}">{{ category.label }}</option>{% endfor %}</select></label>
-<label>Asking / base price<input name="base_price" required inputmode="decimal"></label><label>Currency<input name="currency" value="USD" required minlength="3" maxlength="3"></label>
+<label>Asking / base price<input name="base_price" required inputmode="decimal"></label><label>Currency<input name="currency" value="USD" required minlength="3" maxlength="3" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
 <label>Inbound shipping <span class="muted">(blank means unknown)</span><input name="inbound_shipping" inputmode="decimal"></label>
 <label>Condition<select name="condition" required>{% for condition in conditions %}<option value="{{ condition }}">{{ condition|replace('_', ' ')|title }}</option>{% endfor %}</select></label>
 <label>Source URL <span class="muted">(HTTPS reference only)</span><input name="source_url" type="url" maxlength="2000" placeholder="https://..."></label>

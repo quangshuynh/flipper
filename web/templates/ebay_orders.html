@@ -11,7 +11,7 @@
   <p>Flipper fetched the last 30 days of eBay orders using read-only access. These rows are not local sales until you explicitly import one.</p>
   <p class="muted">Seller revenue is item revenue plus buyer-paid shipping. Marketplace-collected tax is excluded. Seller-paid postage is a separate expense and remains unknown until recorded or imported.</p>
 </section>
-<section class="panel table-wrap"><table><thead><tr><th>Order line</th><th>eBay state</th><th>Revenue breakdown</th><th>Checkout context</th><th>SKU match</th><th>Local action</th></tr></thead><tbody>
+<section class="panel table-wrap" tabindex="0" aria-label="eBay orders table"><table><thead><tr><th>Order line</th><th>eBay state</th><th>Revenue breakdown</th><th>Checkout context</th><th>SKU match</th><th>Local action</th></tr></thead><tbody>
 {% for row in rows %}{% set order = row.order %}{% set match = row.match %}{% set line = match.line_item %}<tr>
   <td><strong>{{ line.title }}</strong><small>{{ order.creation_date.date().isoformat() }} · Qty {{ line.quantity }}</small></td>
   <td>{{ order.payment_status or 'Unknown payment' }}<small>{{ order.fulfillment_status or 'Unknown fulfillment' }}{% if order.cancellation_status %} · {{ order.cancellation_status }}{% endif %}</small></td>

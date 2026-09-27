@@ -2,7 +2,7 @@
 <label>Source<input name="source" required maxlength="100" value="{{ comp.source if comp else '' }}" placeholder="eBay sold results, local dealer"></label>
 <label>Source identity<select name="source_identity">{% for item in source_identities %}<option value="{{ item.value }}" {% if comp and comp.source_identity == item %}selected{% endif %}>{{ item.value|replace('-', ' ')|title }}</option>{% endfor %}</select></label>
 <label>Observed price<input name="price" required inputmode="decimal" value="{{ comp.price.amount if comp else '' }}"></label>
-<label>Currency<input name="currency" required minlength="3" maxlength="3" value="{{ comp.price.currency if comp else opportunity.base_price.currency }}"></label>
+<label>Currency<input name="currency" required minlength="3" maxlength="3" autocapitalize="characters" autocomplete="off" spellcheck="false" value="{{ comp.price.currency if comp else opportunity.base_price.currency }}"></label>
 <label>Condition<select name="condition">{% for item in comparable_conditions %}<option value="{{ item.value }}" {% if comp and comp.condition == item %}selected{% endif %}>{{ item.value|replace('_', ' ')|title }}</option>{% endfor %}</select></label>
 <label>Event / sold date (optional)<input type="date" name="event_date" value="{{ comp.event_date if comp and comp.event_date else '' }}"></label>
 <label>Observed date<input type="date" name="observed_date" required value="{{ comp.observed_date if comp else today }}"></label>
