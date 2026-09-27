@@ -105,7 +105,7 @@ uvicorn web.app:app --host 0.0.0.0 --port "$PORT" \
   comes from `FLIPPER_PUBLIC_ORIGIN`, cookies are `Secure` by mode, and redirects are relative.
   The only effect is that login throttling sees the proxy's address, which makes it global; see
   [Web security](web-security.md#login-throttling).
-- Render sends `SIGTERM` and waits up to `maxShutdownDelaySeconds` (30). Uvicorn finishes
+- Render sends `SIGTERM` and waits up to its default 30-second shutdown delay. Uvicorn finishes
   in-flight requests for up to 20 seconds and exits. Every write is one SQLite transaction, so an
   interrupted request leaves no partial write.
 
