@@ -14,6 +14,12 @@ controlled local files. External eBay data is normalized in memory and only supp
 imports create minimized records. The dashboard's local pages do not depend on live eBay; the eBay
 Listings route deliberately isolates its live read.
 
+`backup/` owns full backups of the authoritative boundary: a consistent SQLite snapshot through
+the online backup API, the attachment files that snapshot references, a verification manifest,
+restore into a new directory, and the `flipper-logical-v1` fingerprint used to prove equivalence.
+It reads the source database read-only and never goes through `InventoryStore`, so a backup never
+migrates or creates a database. There is no web backup surface.
+
 Keep optional AI, market-data, Discord, and marketplace paths independently fallible. Preserve exact
 money, stable identity, transactionality, privacy boundaries, and existing valuation/scoring when
 working on unrelated features.

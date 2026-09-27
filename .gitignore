@@ -15,4 +15,6 @@ venv/
 .vscode/
 *.tmp
 data/attachments/
+flipper-backup-*/
+.flipper-backup-*.partial/
 site/

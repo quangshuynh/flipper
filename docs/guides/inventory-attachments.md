@@ -21,4 +21,4 @@ python main.py inventory attachment-remove Q0001 ATTACHMENT_ID
 
 The web detail page previews or downloads only files owned by the requested Q-number. Browser upload
 and deletion are intentionally unavailable. Sold and archived items retain their attachments. Back
-up the database and attachment directory together; see [Backup boundary](../operations/backup-boundary.md).
+up the database and attachment directory together; see [Backup & restore](../operations/backup-boundary.md).

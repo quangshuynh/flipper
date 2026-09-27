@@ -33,5 +33,10 @@ authoritative, while every newly added component stays unknown until an explicit
 re-import safely enriches it. The migration never derives components from totals or rewrites a
 historical sale with guessed values.
 
+The backup logical fingerprint covers every table and schema object automatically, so a new
+migration needs no fingerprint change. A migration does change the fingerprint of the databases it
+upgrades, which is expected. Backup verification rejects backups whose schema is newer than the
+running code.
+
 Tests should assert meaningful structure and behavior rather than decorative CSS values. Networked
 integrations are mocked unless an explicitly authorized, read-only production smoke is being run.
