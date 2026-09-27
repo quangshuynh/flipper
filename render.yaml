@@ -23,7 +23,6 @@ services:
     # GET /login is already public, touches no data, and answers only after startup migrations
     # succeed, so no extra health route is needed.
     healthCheckPath: /login
-    maxShutdownDelaySeconds: 30
     disk:
       name: flipper-data
       mountPath: /var/data
