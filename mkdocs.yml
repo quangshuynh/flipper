@@ -48,6 +48,7 @@ nav:
   - Reference:
       - CLI: reference/cli.md
       - Configuration: reference/configuration.md
+      - Phone access (LAN): guides/phone-access.md
       - Backup & restore: operations/backup-boundary.md
       - Web security: operations/web-security.md
       - Hosted deployment: operations/deployment.md

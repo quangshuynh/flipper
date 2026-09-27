@@ -9,6 +9,10 @@ Use a fresh deduplication database or new listing IDs. Seen IDs are intentionall
 Set `FLIPPER_INVENTORY_DB` (or `FLIPPER_DATA_DIR`) before starting Uvicorn and confirm the path;
 the server migrates the selected database at startup. Do not point tests at a developer database.
 
+## My phone cannot reach Flipper
+
+See the troubleshooting table in [Phone access](../guides/phone-access.md#troubleshooting).
+
 ## eBay says authorization is unavailable
 
 Check safe status in Settings or `python main.py ebay status`, verify seller client configuration,

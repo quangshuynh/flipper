@@ -42,7 +42,8 @@ By default the web app runs in local mode without a password and answers only re
 computer. To require sign-in, generate an owner-password hash and a session secret with
 `python main.py auth hash-password` and `python main.py auth session-secret` and set both. See
 [Web security](operations/web-security.md), which also covers the hosted mode required before any
-internet exposure.
+internet exposure. To use Flipper from a phone on your home Wi-Fi without hosting it, run
+`python main.py web lan`; see [Phone access](guides/phone-access.md).
 
 Open `/deals` to run an explicit, read-only eBay discovery search when application credentials and
 production access are configured. The dashboard and other local pages do not trigger discovery.

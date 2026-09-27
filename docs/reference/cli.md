@@ -11,6 +11,7 @@ arguments. The main areas are:
 | `reports` | Summary, inventory, and sales reports |
 | `backup` | Create, verify, and restore database + attachment backups; logical fingerprints |
 | `auth` | Generate the web owner-password hash and session secret (prints only) |
+| `web lan` | Serve the web app to a phone on this trusted private network (sign-in required) |
 | `ebay` | Seller OAuth, read-only listing/order/Finances retrieval, reconciliation, and explicit local imports |
 
 Commands use the local SQLite database selected by their documented option/environment default.
@@ -43,3 +44,17 @@ python main.py auth session-secret
 value; there is deliberately no password argument. `session-secret` prints a new random
 `FLIPPER_SESSION_SECRET`. Neither writes files or configuration. See
 [Web security](../operations/web-security.md).
+
+## Web commands
+
+```bash
+python main.py web lan [--port PORT] [--bind ADDRESS]
+```
+
+Serves the web app over plain HTTP to devices on this computer's private network in the `lan`
+security mode. It requires `FLIPPER_PASSWORD_HASH`. It generates an in-memory session secret when
+`FLIPPER_SESSION_SECRET` is unset and refuses hosted configuration. It uses the web app's own
+storage resolution, so there is no `--database` flag. The defaults are `0.0.0.0` and port `8000`;
+`--bind` accepts one private IPv4 address. It prints the local and phone URLs and the database path,
+never secrets, and exits with status 1 on invalid configuration or a busy port. See
+[Phone access](../guides/phone-access.md).

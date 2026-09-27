@@ -1,0 +1,19 @@
+{
+  "name": "Flipper",
+  "short_name": "Flipper",
+  "description": "Local-first resale operations",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#152c2d",
+  "theme_color": "#152c2d",
+  "icons": [
+    {
+      "src": "/static/flipper-logo2.png",
+      "sizes": "797x797",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
