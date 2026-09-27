@@ -6,13 +6,14 @@ Use a fresh deduplication database or new listing IDs. Seen IDs are intentionall
 
 ## The web app opens the wrong inventory
 
-Set `FLIPPER_INVENTORY_DB` before starting Uvicorn and confirm the path. Do not point tests at a
-developer database.
+Set `FLIPPER_INVENTORY_DB` (or `FLIPPER_DATA_DIR`) before starting Uvicorn and confirm the path;
+the server migrates the selected database at startup. Do not point tests at a developer database.
 
 ## eBay says authorization is unavailable
 
 Check safe status in Settings or `python main.py ebay status`, verify seller client configuration,
-then disconnect/connect to grant current scopes. Tokens stay in the OS credential store.
+then disconnect/connect to grant current scopes. Tokens stay in the configured credential store
+(the OS keyring by default).
 
 ## A sale or transaction will not import
 
