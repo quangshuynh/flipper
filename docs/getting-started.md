@@ -1,0 +1,55 @@
+# Getting started
+
+## Requirements
+
+Use Python 3.13 or newer and Git. Clone the repository, create a virtual environment, and install
+the runtime dependencies.
+
+=== "Windows PowerShell"
+
+    ```powershell
+    py -3.13 -m venv .venv
+    .\.venv\Scripts\Activate.ps1
+    python -m pip install -r requirements.txt
+    ```
+
+=== "macOS / Linux"
+
+    ```bash
+    python3.13 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install -r requirements.txt
+    ```
+
+## First analysis
+
+`python main.py` reads `data/listings.json`. A feed is a JSON array of listing objects with an ID,
+title, description, asking price, URL, location, and optional distance. The bundled fixture is safe
+for trying the deterministic pipeline. See [Analysis](guides/analysis.md) before using your own data.
+
+## Web application
+
+```bash
+uvicorn web.app:app --reload
+```
+
+Open `http://127.0.0.1:8000`. Set `FLIPPER_INVENTORY_DB` to select another local SQLite database
+(see [Configuration](reference/configuration.md#storage-locations)). The server initializes and
+migrates that database once at startup and refuses to start if that fails. Use a copy when
+experimenting.
+
+By default the web app runs in local mode without a password and answers only requests from this
+computer. To require sign-in, generate an owner-password hash and a session secret with
+`python main.py auth hash-password` and `python main.py auth session-secret` and set both. See
+[Web security](operations/web-security.md), which also covers the hosted mode required before any
+internet exposure. To use Flipper from a phone on your home Wi-Fi without hosting it, run
+`python main.py web lan`; see [Phone access](guides/phone-access.md).
+
+Open `/deals` to run an explicit, read-only eBay discovery search when application credentials and
+production access are configured. The dashboard and other local pages do not trigger discovery.
+
+## Optional integrations
+
+Environment variables can enable OpenAI enrichment, market-data lookup, Discord alerts, and eBay
+seller APIs. None is required for local deterministic parsing, heuristic pricing, inventory, or
+reports. Consult [Configuration](reference/configuration.md) and never commit `.env` or tokens.

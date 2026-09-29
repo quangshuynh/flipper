@@ -1,0 +1,12 @@
+#!/bin/sh
+# Run the Flipper CLI inside the production container as the unprivileged app user, so files it
+# creates on the persistent disk (backups, restores, credentials) stay owned by that user.
+# Usage: flipper backup create --output-dir /var/data/backups
+set -eu
+umask 077
+cd /app
+if [ "$(id -u)" = "0" ]; then
+    exec setpriv --reuid=flipper --regid=flipper --init-groups --inh-caps=-all -- \
+        python /app/main.py "$@"
+fi
+exec python /app/main.py "$@"

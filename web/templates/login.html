@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{{ title }} · Flipper</title>
+  <meta name="theme-color" content="#152c2d">
+  <meta name="apple-mobile-web-app-title" content="Flipper">
+  <link rel="manifest" href="{{ url_for('static', path='/manifest.webmanifest').path }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', path='/flipper-logo2.png').path }}">
+  <link rel="icon" type="image/png" href="{{ url_for('static', path='/flipper-logo2.png').path }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css').path }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/operational.css').path }}">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="panel login-panel" aria-labelledby="login-title">
+      <div class="login-brand">
+        <img src="{{ url_for('static', path='/flipper-logo2.png').path }}" alt="" width="56" height="56">
+        <div><p class="eyebrow">Flipper</p><h1 id="login-title">Sign in</h1></div>
+      </div>
+      {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+      <form class="stacked-form" method="post" action="/login">
+        <input type="hidden" name="next" value="{{ next_path }}">
+        <label>Password<input type="password" name="password" autocomplete="current-password" required autofocus maxlength="1024"></label>
+        <button type="submit">Sign in</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

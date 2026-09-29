@@ -1,4 +1,5 @@
 .env
+context.md
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -13,3 +14,7 @@ venv/
 .DS_Store
 .vscode/
 *.tmp
+data/attachments/
+flipper-backup-*/
+.flipper-backup-*.partial/
+site/

@@ -1,0 +1,1 @@
+"""Sale economics domain logic."""

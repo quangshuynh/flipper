@@ -1,0 +1,59 @@
+site_name: Flipper
+site_description: Local-first resale intelligence and operations
+site_url: https://quangshuynh.github.io/flipper/
+repo_url: https://github.com/quangshuynh/flipper
+repo_name: quangshuynh/flipper
+strict: true
+theme:
+  name: material
+  logo: images/flipper-logo2.png
+  favicon: images/flipper-logo2.png
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.footer
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+    - search.suggest
+  palette:
+    scheme: slate
+    primary: custom
+    accent: custom
+extra_css:
+  - stylesheets/extra.css
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Deal Intelligence:
+      - Overview & Economics: concepts/deal-intelligence.md
+      - Evidence & Comparison: concepts/evidence-comparison.md
+      - Comparable Evidence: concepts/comparable-evidence.md
+      - Research History: guides/research-history.md
+      - eBay Discovery: guides/ebay-discovery.md
+      - PC Analysis: guides/analysis.md
+  - Inventory:
+      - Acquisition: guides/acquisition.md
+      - Lifecycle: concepts/q-numbers-lifecycle.md
+      - Inventory & Attachments: guides/inventory-attachments.md
+      - Valuations & Money: concepts/valuations-money.md
+  - Selling:
+      - eBay Seller Integration: guides/ebay.md
+      - Sales & accounting: guides/sales-accounting.md
+      - Reconciliation: concepts/reconciliation.md
+      - Reports & dashboard: guides/reports-dashboard.md
+      - Historical insights: guides/historical-insights.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Configuration: reference/configuration.md
+      - Phone access (LAN): guides/phone-access.md
+      - Backup & restore: operations/backup-boundary.md
+      - Web security: operations/web-security.md
+      - Hosted deployment: operations/deployment.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Development:
+      - Architecture: development/architecture.md
+      - Testing & migrations: development/testing-migrations.md
+      - Roadmap: roadmap/deals.md

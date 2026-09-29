@@ -1,0 +1,3 @@
+# Files executed inside the Linux production image must keep LF line endings on every checkout.
+Dockerfile text eol=lf
+deploy/* text eol=lf

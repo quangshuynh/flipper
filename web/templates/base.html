@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · Flipper</title>
+  <meta name="theme-color" content="#152c2d">
+  <meta name="apple-mobile-web-app-title" content="Flipper">
+  <link rel="manifest" href="{{ url_for('static', path='/manifest.webmanifest').path }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', path='/flipper-logo2.png').path }}">
+  <link rel="icon" type="image/png" href="{{ url_for('static', path='/flipper-logo2.png').path }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css').path }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/operational.css').path }}">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Flipper dashboard">
+        <img src="{{ url_for('static', path='/flipper-logo2.png').path }}" alt="" width="48" height="48">
+        <span>Flipper <small>Resale command center</small></span>
+      </a>
+      <nav aria-label="Primary">
+        <a class="{{ nav_class('dashboard') }}" href="/"{% if section == 'dashboard' %} aria-current="page"{% endif %}>Dashboard</a>
+        <a class="{{ nav_class('deals') }}" href="/deals"{% if section == 'deals' %} aria-current="page"{% endif %}>Deals</a>
+        <a class="{{ nav_class('research') }}" href="/deals/history"{% if section == 'research' %} aria-current="page"{% endif %}>Research History</a>
+        <a class="{{ nav_class('inventory') }}" href="/inventory"{% if section == 'inventory' %} aria-current="page"{% endif %}>Inventory</a>
+        <a class="{{ nav_class('ebay') }}" href="/ebay/listings"{% if section == 'ebay' %} aria-current="page"{% endif %}>eBay</a>
+        <a class="{{ nav_class('sales') }}" href="/sales"{% if section == 'sales' %} aria-current="page"{% endif %}>Sales</a>
+        <a class="{{ nav_class('insights') }}" href="/insights"{% if section == 'insights' %} aria-current="page"{% endif %}>Insights</a>
+        <a class="{{ nav_class('settings') }}" href="/settings"{% if section == 'settings' %} aria-current="page"{% endif %}>Settings</a>
+      </nav>
+      <p class="local-note"><span aria-hidden="true"></span> Local database is authoritative</p>
+      {% if request.state.signed_in %}<form class="sidebar-signout" method="post" action="/logout"><button class="button secondary" type="submit">Sign out</button></form>{% endif %}
+    </aside>
+    <main id="content">
+      <header class="page-header"><div><p class="eyebrow">Resale operations</p><h1>{{ title }}</h1></div>{% block actions %}{% endblock %}</header>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

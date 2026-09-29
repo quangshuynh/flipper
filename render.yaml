@@ -1,0 +1,50 @@
+# Render Blueprint for the one hosted Flipper instance. See docs/operations/deployment.md.
+#
+# This defines only the new private Flipper web service. The separately deployed eBay
+# account-deletion service is not part of this Blueprint and is left unchanged.
+#
+# Secrets use `sync: false`: Render asks for them when the Blueprint is first applied and they
+# never appear in this repository. Generate FLIPPER_PASSWORD_HASH with
+# `python main.py auth hash-password` and FLIPPER_SESSION_SECRET with
+# `python main.py auth session-secret`.
+services:
+  - type: web
+    name: flipper-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    region: virginia
+    # Exactly one instance: SQLite has one writer, and a Render disk cannot be shared anyway.
+    numInstances: 1
+    # Deploy main only after its CI checks pass. Pull requests never deploy.
+    autoDeployTrigger: checksPass
+    branch: main
+    # GET /login is already public, touches no data, and answers only after startup migrations
+    # succeed, so no extra health route is needed.
+    healthCheckPath: /login
+    disk:
+      name: flipper-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: FLIPPER_WEB_SECURITY_MODE
+        value: hosted
+      - key: FLIPPER_DATA_DIR
+        value: /var/data/flipper
+      - key: FLIPPER_CREDENTIAL_BACKEND
+        value: file
+      - key: FLIPPER_PASSWORD_HASH
+        sync: false
+      - key: FLIPPER_SESSION_SECRET
+        sync: false
+      - key: FLIPPER_PUBLIC_ORIGIN
+        sync: false
+      - key: EBAY_SELLER_ENV
+        value: production
+      - key: EBAY_SELLER_CLIENT_ID
+        sync: false
+      - key: EBAY_SELLER_CLIENT_SECRET
+        sync: false
+      - key: EBAY_SELLER_RUNAME
+        sync: false
