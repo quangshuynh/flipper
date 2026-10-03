@@ -96,7 +96,8 @@ def _build_listing(item: dict[str, Any], index: int) -> Listing:
     latitude = _safe_float(item.get("latitude", item.get("lat")))
     longitude = _safe_float(item.get("longitude", item.get("lon", item.get("lng"))))
 
-    location_text = str(item.get("location_text") or item.get("location") or item.get("city") or "")
+    location_text_raw = item.get("location_text") or item.get("location") or item.get("city")
+    location_text = str(location_text_raw or "")
 
     return Listing(
         listing_id=listing_id,
