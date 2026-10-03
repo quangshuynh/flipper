@@ -96,8 +96,7 @@ def _build_listing(item: dict[str, Any], index: int) -> Listing:
     latitude = _safe_float(item.get("latitude", item.get("lat")))
     longitude = _safe_float(item.get("longitude", item.get("lon", item.get("lng"))))
 
-    location_text_raw = item.get("location_text") or item.get("location") or item.get("city")
-    location_text = str(location_text_raw or "")
+    location_text = str(item.get("location_text") or item.get("location") or item.get("city") or "")
 
     return Listing(
         listing_id=listing_id,
@@ -147,7 +146,17 @@ def fetch_listings(json_path: str | Path = DEFAULT_JSON_PATH) -> List[Listing]:
         raw = json.load(f)
 
     if isinstance(raw, dict):
-        raw_listings = raw.get("listings", [])
+        if "listings" not in raw:
+            raise ValueError(
+                "JSON feed object must contain a 'listings' key (got keys: %s)"
+                % ", ".join(sorted(raw.keys())) or "(empty object)"
+            )
+        if not isinstance(raw["listings"], list):
+            raise ValueError(
+                "JSON feed 'listings' must be a list, got %s"
+                % type(raw["listings"]).__name__
+            )
+        raw_listings = raw["listings"]
     elif isinstance(raw, list):
         raw_listings = raw
     else:

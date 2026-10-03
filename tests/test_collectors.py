@@ -35,3 +35,62 @@ def test_json_collector_skips_invalid_prices(tmp_path):
     listings = fetch_listings(path)
 
     assert [listing.listing_id for listing in listings] == ["good"]
+
+
+def test_json_collector_rejects_object_without_listings_key(tmp_path):
+    """
+    a top-level object missing the 'listings' key must fail loudly instead of
+    silently producing an empty feed
+    :param tmp_path: pytest temporary directory fixture
+    :returns: None
+    """
+    path = tmp_path / "listings.json"
+    path.write_text(json.dumps({"items": []}), encoding="utf-8")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="listings"):
+        fetch_listings(path)
+
+
+def test_json_collector_rejects_non_list_listings_value(tmp_path):
+    """
+    a top-level object whose 'listings' value is not a list must be rejected
+    :param tmp_path: pytest temporary directory fixture
+    :returns: None
+    """
+    path = tmp_path / "listings.json"
+    path.write_text(json.dumps({"listings": {"nested": []}}), encoding="utf-8")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="list"):
+        fetch_listings(path)
+
+
+def test_json_collector_accepts_empty_listings_object(tmp_path):
+    """
+    `{"listings": []}` remains a valid empty feed
+    :param tmp_path: pytest temporary directory fixture
+    :returns: None
+    """
+    path = tmp_path / "listings.json"
+    path.write_text(json.dumps({"listings": []}), encoding="utf-8")
+
+    listings = fetch_listings(path)
+
+    assert listings == []
+
+
+def test_json_collector_accepts_top_level_list(tmp_path):
+    """
+    a top-level list remains supported unchanged
+    :param tmp_path: pytest temporary directory fixture
+    :returns: None
+    """
+    path = tmp_path / "listings.json"
+    path.write_text(json.dumps([{"id": "1", "price": 100, "title": "Item"}]), encoding="utf-8")
+
+    listings = fetch_listings(path)
+
+    assert [listing.listing_id for listing in listings] == ["1"]
