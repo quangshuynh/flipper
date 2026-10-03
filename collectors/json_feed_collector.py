@@ -149,12 +149,12 @@ def fetch_listings(json_path: str | Path = DEFAULT_JSON_PATH) -> List[Listing]:
         if "listings" not in raw:
             raise ValueError(
                 "JSON feed object must contain a 'listings' key (got keys: %s)"
-                % ", ".join(sorted(raw.keys())) or "(empty object)"
+                % ", ".join(sorted(raw.keys()))
+                or "(empty object)"
             )
         if not isinstance(raw["listings"], list):
             raise ValueError(
-                "JSON feed 'listings' must be a list, got %s"
-                % type(raw["listings"]).__name__
+                "JSON feed 'listings' must be a list, got %s" % type(raw["listings"]).__name__
             )
         raw_listings = raw["listings"]
     elif isinstance(raw, list):
