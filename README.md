@@ -29,12 +29,16 @@ Find the flip → Understand the economics → Acquire it → Track inventory
 - Creates durable Q-number inventory records from explicit acquisitions.
 - Tracks inventory lifecycle, attachments, valuations, marketplace linkage, sales, costs,
   and reconciliation in local SQLite.
+- Prepares eBay listings from inventory records with an editable title, description, condition,
+  defects, user-provided price, and estimated proceeds, without publishing anything
+  ([Quick Listing Prep](docs/guides/listing-prep.md)).
 - Reads eBay seller listings, orders, and Finances data through authorized APIs without
   marketplace writes.
 - Reconciles seller revenue, marketplace fees, shipping, refunds, adjustments, and other
   recorded economics while preserving unknown or incomplete inputs.
 - Compares recorded outcomes with the expectations captured during research.
-- Presents local operational reports and workflow state in a server-rendered web application.
+- Presents local operational reports and workflow state in a server-rendered web application
+  with a dark, outlined design system ([design notes](docs/development/design-system.md)).
 
 Flipper is not a marketplace crawler, a complete accounting system, or an eBay listing manager.
 
@@ -43,26 +47,26 @@ Flipper is not a marketplace crawler, a complete accounting system, or an eBay l
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/images/flipper-dashboard.png" alt="Flipper dashboard showing inventory, workflow state, attention items, and sales economics">
+      <img src="docs/images/flipper-dashboard.png" alt="Flipper dashboard showing attention items, inventory metrics, lifecycle status, and realized versus provisional sales economics">
       <br>
-      <sub><strong>Dashboard: </strong>Operational overview of inventory, workflow state, reconciliation status, and recorded sales economics.</sub>
+      <sub><strong>Dashboard: </strong>Daily workspace with attention items, inventory status, and realized versus provisional sales economics.</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/images/flipper-research.png" alt="Flipper Deals workspace showing live eBay opportunities, research modes, and comparison candidates">
+      <img src="docs/images/flipper-research.png" alt="Flipper Deals workspace showing opportunity cards with asking prices, missing-evidence notes, and Deal Score states">
       <br>
-      <sub><strong>Deal research: </strong>Read-only marketplace research with active listings, sold-comparable separation, and comparison workflows.</sub>
+      <sub><strong>Deal research: </strong>Opportunity cards with source asking prices, evidence gaps, and Deal Score states; active listings and sold comparables stay separate.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/images/flipper-inventory.png" alt="Flipper inventory view showing durable Q-number records, lifecycle status, marketplace linkage, and sale references">
+      <img src="docs/images/flipper-inventory.png" alt="Flipper inventory table showing Q-number chips, lifecycle status, acquisition cost, marketplace linkage, and next actions">
       <br>
-      <sub><strong>Inventory: </strong>Durable Q-number records with lifecycle state, acquisition facts, marketplace linkage, and sale references.</sub>
+      <sub><strong>Inventory: </strong>Durable Q-number records with lifecycle state, acquisition facts, marketplace linkage, and next actions such as Prepare listing.</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/images/flipper-sale.png" alt="Flipper sale detail showing seller revenue, fees, reconciliation state, and provisional realized economics">
+      <img src="docs/images/flipper-sale.png" alt="Flipper sale detail showing seller revenue, provisional profit, and a reconciliation checklist with confirmed fees and unknown categories">
       <br>
-      <sub><strong>Sale reconciliation: </strong>Revenue, marketplace fees, missing confirmations, and provisional economics kept distinct until reconciliation is complete.</sub>
+      <sub><strong>Sale reconciliation: </strong>Seller revenue, a per-category checklist where unconfirmed costs read Unknown, and profit kept provisional until reconciliation is complete.</sub>
     </td>
   </tr>
 </table>

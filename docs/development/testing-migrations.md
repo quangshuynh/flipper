@@ -33,6 +33,11 @@ authoritative, while every newly added component stays unknown until an explicit
 re-import safely enriches it. The migration never derives components from totals or rewrites a
 historical sale with guessed values.
 
+Schema v15 adds the `listing_drafts` table: at most one user-authored listing draft per
+inventory item, owned through an explicit foreign key. It changes no existing table or row.
+Optional amounts are exact integer cents where `NULL` means unknown, and checks keep the
+minimum offer at or below the asking price. Drafts never feed valuation or accounting.
+
 The backup logical fingerprint covers every table and schema object automatically, so a new
 migration needs no fingerprint change. A migration does change the fingerprint of the databases it
 upgrades, which is expected. Backup verification rejects backups whose schema is newer than the

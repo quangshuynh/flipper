@@ -14,11 +14,12 @@ JPEG, PNG, WebP, and PDF files up to 25 MiB are accepted only when extension and
 Original names are display metadata; controlled UUID-based names prevent path collisions.
 
 ```bash
-python main.py inventory attachment-add Q0001 receipt.jpg --category receipt
-python main.py inventory attachment-list Q0001
-python main.py inventory attachment-remove Q0001 ATTACHMENT_ID
+python main.py inventory attach Q0001 receipt.jpg --category receipt
+python main.py inventory attachments Q0001
+python main.py inventory remove-attachment Q0001 ATTACHMENT_ID
 ```
 
 The web detail page previews or downloads only files owned by the requested Q-number. Browser upload
-and deletion are intentionally unavailable. Sold and archived items retain their attachments. Back
+and deletion are intentionally unavailable. Image attachments in the `product_photo`
+category also appear in [Quick Listing Prep](listing-prep.md). Sold and archived items retain their attachments. Back
 up the database and attachment directory together; see [Backup & restore](../operations/backup-boundary.md).

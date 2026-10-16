@@ -3,7 +3,8 @@
 Flipper is one Python application with a CLI coordinator (`main.py`) and a server-rendered FastAPI /
 Jinja web interface. Domain modules own parsing, pricing, inventory, eBay normalization and
 reconciliation, sales economics, and reports. Web routes reuse those services; templates contain no
-SQL or accounting formulas. CSS is static and requires no Node build.
+SQL or accounting formulas. CSS is static and requires no Node build; see the
+[web design system](design-system.md) for tokens and components.
 
 SQLite under `inventory/` is authoritative and versioned by ordered migrations. `storage_config.py`
 resolves writable locations for both the CLI and web app. The web app migrates its database once
@@ -12,7 +13,9 @@ while each SQLite operation still opens and closes its own connection. Independe
 checking migrations on every operation. Attachments are
 controlled local files. External eBay data is normalized in memory and only supported explicit
 imports create minimized records. The dashboard's local pages do not depend on live eBay; the eBay
-Listings route deliberately isolates its live read.
+Listings route deliberately isolates its live read. `inventory/listing_prep.py` holds the
+deterministic Quick Listing Prep helpers (proceeds estimate, description template, and
+existing pricing evidence); listing drafts are local only and never sent to a marketplace.
 
 `web/security.py` is the web app's single security boundary: one middleware that validates
 configuration and trusted hosts, requires same-origin proof for every non-`GET` request, requires

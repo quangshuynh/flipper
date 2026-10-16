@@ -38,6 +38,7 @@ nav:
       - Acquisition: guides/acquisition.md
       - Lifecycle: concepts/q-numbers-lifecycle.md
       - Inventory & Attachments: guides/inventory-attachments.md
+      - Quick Listing Prep: guides/listing-prep.md
       - Valuations & Money: concepts/valuations-money.md
   - Selling:
       - eBay Seller Integration: guides/ebay.md
@@ -55,5 +56,6 @@ nav:
       - Troubleshooting: operations/troubleshooting.md
   - Development:
       - Architecture: development/architecture.md
+      - Web design system: development/design-system.md
       - Testing & migrations: development/testing-migrations.md
       - Roadmap: roadmap/deals.md

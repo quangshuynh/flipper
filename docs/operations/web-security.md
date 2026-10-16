@@ -280,5 +280,5 @@ anything.
 Backups contain only the database and the attachments it references; see
 [Backup and restore](backup-boundary.md). The password hash, session secret, public origin,
 allowed hosts, eBay credentials, and `.env` are never part of a backup, and a test proves none of
-them appear in any backup file. Authentication adds no tables or migrations, so the schema stays at
-v14. Restoring a backup never restores or changes security settings.
+them appear in any backup file. Authentication adds no tables or migrations; the current schema is
+v15. Restoring a backup never restores or changes security settings.
