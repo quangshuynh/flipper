@@ -53,6 +53,8 @@ EXPECTED_ROUTES = {
     ("POST", "/inventory/{inventory_id}/sourcing-travel/clear"): MUTATION,
     ("GET", "/inventory/{inventory_id}/attachments/{attachment_id}"): READ,
     ("POST", "/inventory/{inventory_id}/notes"): MUTATION,
+    ("GET", "/inventory/{inventory_id}/listing"): READ,
+    ("POST", "/inventory/{inventory_id}/listing"): MUTATION,
     ("GET", "/sales"): READ,
     ("GET", "/sales/{sale_id}"): READ,
     ("POST", "/sales/{sale_id}/accounting"): MUTATION,

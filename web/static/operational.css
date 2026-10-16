@@ -8,7 +8,7 @@
 .dash-welcome h2{max-width:28ch;margin:.2rem 0 .5rem;font:900 clamp(1.45rem,2.4vw,2rem)/1.08 var(--font-display);letter-spacing:-.02em}
 .dash-welcome{padding-right:7rem}.dash-welcome p{max-width:52ch;margin:0 0 1rem;color:var(--ink-2)}
 .dash-welcome .form-actions{position:relative;z-index:1}
-.dash-welcome::after{content:"";position:absolute;right:-2.4rem;bottom:-2.4rem;width:7.5rem;height:7.5rem;border:var(--stroke) solid var(--ink);border-radius:50%;background:var(--yellow);box-shadow:inset 0 0 0 1.1rem var(--paper),inset 0 0 0 calc(1.1rem + var(--stroke)) var(--ink)}
+.dash-welcome::after{content:"";position:absolute;right:-2.4rem;bottom:-2.4rem;width:7.5rem;height:7.5rem;border:var(--stroke) solid var(--yellow);border-radius:50%;background:var(--yellow);box-shadow:inset 0 0 0 1.1rem var(--sky),inset 0 0 0 calc(1.1rem + var(--stroke)) var(--yellow);opacity:.9}
 .status-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.5rem;margin:0}
 .status-strip div{display:grid;gap:.15rem;padding:.75rem .8rem;border:var(--stroke) solid var(--line);border-radius:var(--radius-sm);background:var(--paper)}
 .status-strip dt{order:2;color:var(--ink-2);font-size:.75rem;font-weight:750}
@@ -58,8 +58,8 @@ details summary{color:var(--ink);font-weight:800;cursor:pointer}
 .deal-photo span{display:grid;gap:.35rem;justify-items:center}
 .deal-photo span::before{content:"";width:2.4rem;height:1.7rem;border:var(--stroke) solid var(--muted);border-radius:6px;background:radial-gradient(circle at 70% 35%,var(--muted) .18rem,#0000 .2rem)}
 .deal-price{display:flex;align-items:baseline;flex-wrap:wrap;gap:.2rem .5rem;margin:0 0 .6rem}
-.deal-price strong{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .7rem .15rem .55rem;border:var(--stroke) solid var(--line);border-radius:var(--pill) 8px 8px var(--pill);background:var(--yellow);font:900 1.3rem/1.2 var(--font-display);font-variant-numeric:tabular-nums}
-.deal-price strong::before{content:"";width:.45rem;height:.45rem;border:var(--stroke) solid var(--ink);border-radius:50%;background:var(--paper)}
+.deal-price strong{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .7rem .15rem .55rem;border:var(--stroke) solid var(--line);border-radius:var(--pill) 8px 8px var(--pill);border-color:var(--yellow);background:var(--yellow);color:var(--on-accent);font:900 1.3rem/1.2 var(--font-display);font-variant-numeric:tabular-nums}
+.deal-price strong::before{content:"";width:.45rem;height:.45rem;border:var(--stroke) solid var(--on-accent);border-radius:50%;background:var(--paper)}
 .deal-price small{color:var(--muted);font-size:.75rem;font-weight:700}
 .deal-facts{margin:0 0 .8rem}
 .deal-facts div{display:flex;justify-content:space-between;gap:1rem;padding:.4rem 0;border-top:1px solid var(--line-soft)}
@@ -69,11 +69,11 @@ details summary{color:var(--ink);font-weight:800;cursor:pointer}
 .evidence-strip.saved{border-style:solid;border-color:var(--provisional-ink);background:var(--provisional-soft)}
 .evidence-strip span{color:var(--ink-2);font-size:.78rem}
 .deal-card .deal-score-card{margin-bottom:.8rem}
-.deal-score-card.is-available{background:var(--profit-soft)}.deal-score-card.is-unavailable{border-style:dashed;background:var(--unknown-soft)}
+.deal-score-card.is-available{background:var(--sky)}.deal-score-card.is-unavailable{border-style:dashed;background:var(--unknown-soft)}
 .deal-hero,.deal-layout,.economics-grid{display:grid;gap:1rem}
 .deal-hero{grid-template-columns:1fr auto;align-items:center}
 .asking{display:grid;justify-items:end;text-align:right}
-.asking strong{padding:.15rem .8rem;border:var(--stroke) solid var(--line);border-radius:var(--pill);background:var(--yellow);font:900 1.8rem/1.2 var(--font-display)}
+.asking strong{padding:.15rem .8rem;border:var(--stroke) solid var(--yellow);border-radius:var(--pill);background:var(--yellow);color:var(--on-accent);font:900 1.8rem/1.2 var(--font-display)}
 .asking small,.asking span{color:var(--muted)}
 .deal-layout{grid-template-columns:minmax(0,2fr) minmax(280px,1fr)}
 .economics-grid{grid-template-columns:repeat(3,1fr)}
@@ -81,6 +81,22 @@ details summary{color:var(--ink);font-weight:800;cursor:pointer}
 .economics-grid span,.economics-grid strong{display:block}
 .economics-grid span{color:var(--muted);font-size:.75rem;font-weight:700}
 .economics-grid strong{margin-top:.2rem;font-size:1.08rem}
+
+/* Sales and reconciliation */
+.metrics.metrics-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.metrics small .badge{margin-left:.2rem;vertical-align:middle}
+.recon-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem}
+.recon-card{display:grid;gap:.35rem;min-width:0;padding:.95rem 1rem;border:var(--stroke) solid var(--line);border-radius:var(--radius-sm);background:var(--paper-2)}
+.recon-card header{display:flex;justify-content:space-between;align-items:start;gap:.5rem}
+.recon-card h3{margin:0;font-size:.9rem}
+.recon-card strong{font:900 1.35rem/1.15 var(--font-display);font-variant-numeric:tabular-nums}
+.recon-card small{color:var(--muted)}
+.recon-card.is-confirmed{border-color:var(--profit-edge)}
+.recon-card.is-unknown{border-style:dashed}
+@media(max-width:1100px){.recon-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:650px){.metrics.metrics-3{grid-template-columns:1fr}}
+@media(max-width:420px){.recon-grid{grid-template-columns:1fr}}
+@media(min-width:901px) and (pointer:fine){.button.small{min-height:34px;padding:.3rem .8rem;font-size:.82rem}}
 
 /* Inventory */
 .inventory-head{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin-bottom:.8rem}
@@ -110,7 +126,7 @@ details summary{color:var(--ink);font-weight:800;cursor:pointer}
 .prep-limit{padding:.85rem 1rem;border:var(--stroke) dashed var(--line-soft);border-radius:var(--radius-sm);background:var(--unknown-soft);color:var(--unknown-ink)}
 .prep-limit strong{color:var(--ink)}
 
-@media(max-width:1100px){.deal-search{grid-template-columns:repeat(3,1fr)}.search-wide{grid-column:span 2}.deal-grid{grid-template-columns:1fr 1fr}.dash-hero{grid-template-columns:1fr}}
+@media(max-width:1360px){.deal-search{grid-template-columns:repeat(3,minmax(0,1fr))}.search-wide{grid-column:span 2}}@media(max-width:1100px){.deal-grid{grid-template-columns:1fr 1fr}.dash-hero{grid-template-columns:1fr}}
 @media(max-width:900px){.attention-grid{grid-template-columns:1fr 1fr}.deal-layout,.prep-layout{grid-template-columns:1fr}.money-headlines{grid-template-columns:1fr}}
 @media(max-width:650px){.dash-welcome{padding-right:1rem}.deal-search,.deal-grid,.economics-grid{grid-template-columns:1fr}.search-wide{grid-column:auto}.deal-hero{grid-template-columns:1fr}.asking{justify-items:start;text-align:left}.card-actions{align-items:stretch;flex-direction:column}.deals-intro{grid-template-columns:1fr}.status-strip{grid-template-columns:1fr 1fr}.dash-welcome::after{display:none}}
 @media(max-width:520px){.attention-grid{grid-template-columns:1fr 1fr;gap:.5rem}.attention-grid a{min-height:0;padding:.8rem .8rem 1.8rem;font-size:.86rem}.attention-grid strong{font-size:1.6rem}}

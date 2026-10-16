@@ -67,12 +67,21 @@ from ebay.reconciliation import reconcile_ebay_orders
 from ebay.sale_import import SaleImportStatus, import_ebay_sales
 from ebay.seller_oauth import SellerOAuthClient, SellerOAuthConfig, SellerOAuthError
 from inventory.attachments import AttachmentService
+from inventory.listing_prep import (
+    CONDITION_LABELS,
+    default_title,
+    description_template,
+    estimate_proceeds,
+    pricing_evidence,
+)
 from inventory.store import (
     AttachmentNotFoundError,
     AttachmentValidationError,
     InventoryNotFoundError,
     InventoryValidationError,
     InventoryStore,
+    LISTING_DRAFT_STATUSES,
+    ListingDraftValidationError,
     ResearchSnapshotNotFoundError,
     ResearchSnapshotValidationError,
     SourcingTravelValidationError,
@@ -188,6 +197,17 @@ templates.env.filters["money"] = _money
 templates.env.filters["money2"] = _money_two_places
 templates.env.filters["percent"] = _percent
 templates.env.filters["snapshot_money"] = _snapshot_money
+
+
+def _cents(value: int | None) -> str:
+    return "Unavailable" if value is None else _money(Decimal(value).scaleb(-2))
+
+
+def _cents_input(value: int | None) -> str:
+    return "" if value is None else f"{Decimal(value).scaleb(-2):.2f}"
+
+
+templates.env.filters["cents"] = _cents
 
 
 @pass_context
@@ -817,6 +837,129 @@ async def inventory_sourcing_travel_clear(request: Request, inventory_id: str):
     return _redirect(f"/inventory/{inventory_id}", message="Actual sourcing travel cleared.")
 
 
+_LISTING_FIELDS = (
+    "title",
+    "description",
+    "condition",
+    "defects",
+    "asking_price",
+    "minimum_offer",
+    "fee_rate_percent",
+    "fixed_fee",
+    "shipping_cost",
+)
+
+
+def _listing_form_values(store: InventoryStore, record, draft, photo_count: int) -> dict[str, str]:
+    """Saved draft values, or deterministic starting text when no draft exists yet."""
+    if draft is None:
+        return {
+            "title": default_title(record),
+            "description": description_template(record, None, "", photo_count),
+            "condition": "",
+            "defects": "",
+            "asking_price": "",
+            "minimum_offer": "",
+            "fee_rate_percent": "",
+            "fixed_fee": "",
+            "shipping_cost": "",
+        }
+    return {
+        "title": draft.title,
+        "description": draft.description,
+        "condition": draft.condition or "",
+        "defects": draft.defects,
+        "asking_price": _cents_input(draft.asking_price_cents),
+        "minimum_offer": _cents_input(draft.minimum_offer_cents),
+        "fee_rate_percent": (
+            "" if draft.fee_rate_bps is None else f"{Decimal(draft.fee_rate_bps).scaleb(-2):.2f}"
+        ),
+        "fixed_fee": _cents_input(draft.fixed_fee_cents),
+        "shipping_cost": _cents_input(draft.shipping_cost_cents),
+    }
+
+
+def _render_listing_prep(
+    request: Request,
+    inventory_id: str,
+    *,
+    values: dict[str, str] | None = None,
+    message: str = "",
+    error_message: str = "",
+    status_code: int = 200,
+):
+    store = _store()
+    try:
+        record = store.get(inventory_id)
+    except InventoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Inventory item not found") from exc
+    attachments = _attachments(store).list(record.inventory_id)
+    photos = [item for item in attachments if item.media_type.startswith("image/")]
+    draft = store.get_listing_draft(record.inventory_id)
+    return _render(
+        request,
+        "listing_prep.html",
+        section="inventory",
+        title=f"Prepare listing · {record.inventory_id}",
+        record=record,
+        draft=draft,
+        values=values or _listing_form_values(store, record, draft, len(photos)),
+        photos=photos,
+        evidence=pricing_evidence(
+            store.baseline_valuation(record.inventory_id),
+            store.list_research_snapshots(record.inventory_id),
+        ),
+        estimate=estimate_proceeds(draft, record.acquisition_cost_cents),
+        conditions=CONDITION_LABELS,
+        editable=record.status in LISTING_DRAFT_STATUSES,
+        message=message,
+        error_message=error_message,
+        status_code=status_code,
+    )
+
+
+@app.get("/inventory/{inventory_id}/listing", response_class=HTMLResponse)
+def listing_prep(request: Request, inventory_id: str, message: str = ""):
+    return _render_listing_prep(request, inventory_id, message=message)
+
+
+@app.post("/inventory/{inventory_id}/listing")
+async def listing_prep_save(request: Request, inventory_id: str):
+    fields = await _post_fields(request)
+    values = {name: fields.get(name, "") for name in _LISTING_FIELDS}
+    if fields.get("action") == "template":
+        # Rebuild only the editable text from current inputs; nothing is saved until Save draft.
+        store = _store()
+        try:
+            record = store.get(inventory_id)
+        except InventoryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Inventory item not found") from exc
+        photo_count = sum(
+            1
+            for item in _attachments(store).list(record.inventory_id)
+            if item.media_type.startswith("image/")
+        )
+        condition = values["condition"] if values["condition"] in CONDITION_LABELS else None
+        values["description"] = description_template(
+            record, condition, values["defects"], photo_count
+        )
+        return _render_listing_prep(
+            request,
+            inventory_id,
+            values=values,
+            message="Description rebuilt from the template. Review it, then save the draft.",
+        )
+    try:
+        _store().save_listing_draft(inventory_id, **values)
+    except InventoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Inventory item not found") from exc
+    except ListingDraftValidationError as exc:
+        return _render_listing_prep(
+            request, inventory_id, values=values, error_message=str(exc), status_code=400
+        )
+    return _redirect(f"/inventory/{inventory_id}/listing", message="Listing draft saved.")
+
+
 @app.get("/inventory/{inventory_id}/attachments/{attachment_id}", response_class=FileResponse)
 def inventory_attachment(inventory_id: str, attachment_id: str):
     """Serve only a database-owned attachment resolved inside Flipper's local root."""
@@ -885,14 +1028,39 @@ def sale_detail(
         if baseline is not None
         else None
     )
+    row = report.rows[0]
+    # Display-only grouping of recorded components; accounting rules live in the report above.
+    category_rows = []
+    for category, label in (
+        ("fees", "Marketplace fees"),
+        ("shipping", "Seller-paid shipping"),
+        ("refunds", "Refunds"),
+        ("adjustments", "Other adjustments"),
+    ):
+        parts = [cost for cost in costs if cost.category == _ACCOUNTING_CATEGORIES[category]]
+        same_currency = all(cost.currency == sale.currency for cost in parts)
+        category_rows.append(
+            {
+                "label": label,
+                "count": len(parts),
+                "confirmed": category not in row.missing_categories,
+                "net_reduction": sum(
+                    (cost.amount if cost.effect == "reduce" else -cost.amount for cost in parts),
+                    Decimal(0),
+                )
+                if same_currency
+                else None,
+            }
+        )
     return _render(
         request,
         "sale_detail.html",
+        category_rows=category_rows,
         section="sales",
         title=sale.sale_id,
         message=message,
         error_message=error_message,
-        row=report.rows[0],
+        row=row,
         costs=costs,
         edit_accounting=edit_accounting,
         valuation_row=valuation_row,

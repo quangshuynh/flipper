@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block actions %}<div class="page-actions"><a class="button secondary" href="/inventory/{{ record.inventory_id }}">Back to {{ record.inventory_id }}</a></div>{% endblock %}
+{% block content %}
+{% if message %}<p class="notice" role="status">{{ message }}</p>{% endif %}
+{% if error_message %}<p class="notice error" role="alert">{{ error_message }}</p>{% endif %}
+<div class="inventory-head"><span class="q-chip">{{ record.inventory_id }}</span><span class="badge {{ record.status }}">{{ record.status }}</span><h2>{{ record.title }}</h2></div>
+<p class="callout"><strong>Preparation only.</strong> Flipper does not publish to eBay or any marketplace. Saving a draft never changes this item's status, acquisition cost, valuations, or sales records.</p>
+<div class="prep-layout">
+<div>
+<section class="panel" aria-labelledby="prep-photos"><div class="panel-head"><div><h2 id="prep-photos">Photos</h2><p>Image attachments already stored for {{ record.inventory_id }}.</p></div></div>
+{% if photos %}<div class="prep-photos">{% for photo in photos %}<a href="/inventory/{{ record.inventory_id }}/attachments/{{ photo.attachment_id }}"><img src="/inventory/{{ record.inventory_id }}/attachments/{{ photo.attachment_id }}" alt="{{ photo.original_filename }}" width="160" height="120" loading="lazy"></a>{% endfor %}</div>{% else %}<div class="prep-limit"><strong>No photos attached.</strong> Attach item photos with <code>python main.py inventory attach {{ record.inventory_id }} PATH --category product_photo</code>.</div>{% endif %}</section>
+<section class="panel" aria-labelledby="prep-draft"><div class="panel-head"><div><h2 id="prep-draft">Listing draft</h2><p>{% if draft %}Last saved {{ draft.updated_at }}.{% else %}Not saved yet. Starting text comes from known inventory facts.{% endif %}</p></div></div>
+{% if editable %}<form class="prep-form" method="post" action="/inventory/{{ record.inventory_id }}/listing">
+<label>Listing title<input name="title" value="{{ values.title }}" maxlength="80" autocomplete="off"><span class="field-hint">Up to 80 characters · {{ values.title|length }}/80 saved or submitted</span></label>
+<div class="field-row">
+<label>Condition<select name="condition"><option value="">Choose a condition</option>{% for value, label in conditions.items() %}<option value="{{ value }}" {% if values.condition == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><span class="field-hint">You choose. Flipper never infers condition from photos or titles.</span></label>
+</div>
+<label>Known defects to disclose<textarea name="defects" maxlength="2000" rows="3" placeholder="Scuff on lid, missing rubber foot, battery holds 70%">{{ values.defects }}</textarea></label>
+<label>Description<textarea name="description" maxlength="5000" rows="12">{{ values.description }}</textarea><span class="field-hint">Bracketed text is a placeholder to confirm or delete before listing.</span></label>
+<fieldset><legend>Price <span class="prep-tag user">User-provided</span></legend><div class="field-row">
+<label>Asking price (USD)<input name="asking_price" value="{{ values.asking_price }}" inputmode="decimal" autocomplete="off"></label>
+<label>Minimum acceptable offer (USD)<input name="minimum_offer" value="{{ values.minimum_offer }}" inputmode="decimal" autocomplete="off"><span class="field-hint">Optional. Never above the asking price.</span></label>
+</div></fieldset>
+<fieldset><legend>Fee and shipping assumptions <span class="prep-tag estimate">Estimate</span></legend><p class="field-hint">Enter your marketplace's current rates for this category. Blank means unknown, not zero.</p><div class="field-row">
+<label>Fee rate (%)<input name="fee_rate_percent" value="{{ values.fee_rate_percent }}" inputmode="decimal" autocomplete="off"></label>
+<label>Fixed per-order fee (USD)<input name="fixed_fee" value="{{ values.fixed_fee }}" inputmode="decimal" autocomplete="off"></label>
+<label>Seller-paid shipping (USD)<input name="shipping_cost" value="{{ values.shipping_cost }}" inputmode="decimal" autocomplete="off"></label>
+</div></fieldset>
+<div class="form-actions"><button type="submit" name="action" value="save">Save draft</button><button class="button secondary" type="submit" name="action" value="template">Rebuild description from template</button></div>
+</form>{% else %}<p class="prep-limit"><strong>Read-only.</strong> Listing drafts can be edited only while an item is acquired or listed. This item is {{ record.status }}.</p>{% if draft %}<p class="preserve note-content">{{ draft.title }}
+
+{{ draft.description }}</p>{% endif %}{% endif %}
+</section>
+</div>
+<aside class="prep-side">
+<section class="panel" aria-labelledby="prep-evidence"><h2 id="prep-evidence">Pricing evidence</h2>
+{% if evidence %}<dl class="detail-list prep-evidence">{% for item in evidence %}<div><dt>{{ item.label }} <span class="prep-tag estimate">Estimate</span></dt><dd>{{ item.amount|money(item.currency) }}<small>{{ item.captured }} · {{ item.detail }}</small></dd></div>{% endfor %}</dl><p class="muted">Dated research already on record for this item. Flipper does not refresh it, add sold comparables, or turn it into a recommendation.</p>{% else %}<p class="prep-limit"><strong>No pricing evidence on record.</strong> Flipper won't suggest a price without it. Research comparables yourself, then enter your own asking price.</p>{% endif %}
+<dl class="detail-list"><div><dt>Your asking price <span class="prep-tag user">User-provided</span></dt><dd>{% if draft and draft.asking_price_cents is not none %}{{ draft.asking_price_cents|cents }}{% else %}<span class="unknown-value">Not set</span>{% endif %}</dd></div><div><dt>Minimum acceptable offer</dt><dd>{% if draft and draft.minimum_offer_cents is not none %}{{ draft.minimum_offer_cents|cents }}{% else %}<span class="unknown-value">Not set</span>{% endif %}</dd></div></dl></section>
+<section class="panel prep-proceeds" aria-labelledby="prep-proceeds"><h2 id="prep-proceeds">Estimated proceeds</h2>
+<dl class="detail-list"><div><dt>Estimated selling fees</dt><dd>{% if estimate.fees_cents is not none %}−{{ estimate.fees_cents|cents }}{% else %}<span class="unknown-value">Unavailable</span>{% endif %}</dd></div><div><dt>Seller-paid shipping</dt><dd>{% if draft and draft.shipping_cost_cents is not none %}−{{ draft.shipping_cost_cents|cents }}{% else %}<span class="unknown-value">Unknown</span>{% endif %}</dd></div><div><dt>Estimated proceeds</dt><dd>{% if estimate.proceeds_cents is not none %}<strong>{{ estimate.proceeds_cents|cents }}</strong>{% else %}<span class="unknown-value">Unavailable</span>{% endif %}</dd></div><div><dt>Acquisition cost <span class="prep-tag fact">Recorded</span></dt><dd>{% if record.acquisition_cost_cents is not none %}−{{ record.acquisition_cost_cents|cents }}{% else %}<span class="unknown-value">Unknown</span>{% endif %}</dd></div><div><dt>Estimated net after cost</dt><dd>{% if estimate.net_after_cost_cents is not none %}<strong class="{{ 'money-loss' if estimate.net_after_cost_cents < 0 else 'money-profit' }}">{{ estimate.net_after_cost_cents|cents }}</strong>{% else %}<span class="unknown-value">Unavailable</span>{% endif %}</dd></div></dl>
+{% if estimate.missing %}<p class="caution">Needs {{ estimate.missing|join(', ') }} in the saved draft before this estimate is complete.</p>{% endif %}
+<p class="muted">Planning estimate from saved draft inputs. It excludes taxes, promotions, refunds, and other unmodeled costs, and it is never recorded as a sale, fee, or profit.</p></section>
+<section class="panel prep-copy" aria-labelledby="prep-copy"><h2 id="prep-copy">Copy-ready text</h2><p class="muted">Tap a box, select all, and copy. Flipper's strict security policy runs no scripts, so there is no clipboard button.</p>
+<label>Copy title<textarea name="copy_title" readonly rows="2">{{ values.title }}</textarea></label>
+<label>Copy description<textarea name="copy_description" readonly rows="8">{{ values.description }}</textarea></label></section>
+</aside>
+</div>
+{% endblock %}
