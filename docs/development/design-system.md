@@ -1,7 +1,7 @@
 # Web design system
 
-The web app uses a dark "sticker book" design: outlined, rounded cards and pill controls on a
-near-black canvas, with bright colors reserved for small, meaningful accents. It adapts the palette
+The web app uses a "sticker book" design: crisp outlined, rounded cards and pill controls on a
+sky-wash canvas, with bright colors reserved for small, meaningful accents. It adapts the palette
 and component language of the [Slush](https://styles.refero.design/style/8b6b547f-a357-4f1b-9842-4579c62dd42b)
 reference without copying its layouts or typography scale.
 
@@ -17,10 +17,10 @@ Define colors once on `:root` and reference them by role. Older rules use legacy
 
 | Group | Tokens | Use |
 | --- | --- | --- |
-| Surfaces | `--canvas`, `--paper`, `--paper-2`, `--deep` | Page, cards, inset panels, input wells |
+| Surfaces | `--canvas`, `--paper`, `--paper-2`, `--field`, `--deep` | Page, cards, inset panels, form controls, code blocks |
 | Text and lines | `--ink`, `--ink-2`, `--muted`, `--line`, `--line-soft` | Body text, outlines, row separators |
 | Brand accents | `--yellow`, `--mint`, `--lavender`, `--orange`, `--violet`, `--sky-deep` | Active navigation, price tags, nav dots, hover |
-| Text on accents | `--on-accent` | Dark text on any bright fill |
+| Text and edges on fills | `--on-ink`, `--on-accent`, `--accent-edge` | Text on ink-filled controls, text on bright fills, outline of bright fills |
 | Profit / confirmed | `--profit-ink`, `--profit-soft`, `--profit-edge` | Realized results, confirmed categories |
 | Loss / attention | `--loss-ink`, `--loss-soft` | Losses, incomplete reconciliation, errors |
 | Provisional | `--provisional-ink`, `--provisional-soft` | Recorded-but-not-final profit, estimates |
@@ -84,4 +84,5 @@ text when editing them.
 - Remote marketplace photos are not shown on Deals cards because the CSP allows only same-origin
   images; cards show a labeled placeholder instead.
 - Bundling an open-source display font would require adding `font-src 'self'` to the CSP.
-- There is a single dark theme; no light theme toggle.
+- There is a single light theme. Every color is a token on `:root`, so a dark variant needs only an
+  alternate token block (a dark draft was explored during the redesign and set aside).

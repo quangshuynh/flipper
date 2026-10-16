@@ -38,7 +38,7 @@ Find the flip → Understand the economics → Acquire it → Track inventory
   recorded economics while preserving unknown or incomplete inputs.
 - Compares recorded outcomes with the expectations captured during research.
 - Presents local operational reports and workflow state in a server-rendered web application
-  with a dark, outlined design system ([design notes](docs/development/design-system.md)).
+  with an outlined, sticker-style design system ([design notes](docs/development/design-system.md)).
 
 Flipper is not a marketplace crawler, a complete accounting system, or an eBay listing manager.
 
