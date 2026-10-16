@@ -991,7 +991,8 @@ def test_cli_backup_uses_configured_storage_without_migrating(tmp_path, monkeypa
     database = tmp_path / "data" / "flipper_inventory.db"
     InventoryStore(database).initialize()
     with sqlite3.connect(database) as connection:
-        connection.execute("DELETE FROM schema_migrations WHERE version = ?", (14,))
+        connection.execute("DELETE FROM schema_migrations WHERE version = ?", (15,))
+        connection.execute("DROP TABLE listing_drafts")
     before = database.read_bytes()
     monkeypatch.setenv("FLIPPER_INVENTORY_DB", str(database))
 
@@ -1000,7 +1001,7 @@ def test_cli_backup_uses_configured_storage_without_migrating(tmp_path, monkeypa
     # An older-schema source is captured as-is; the backup never migrates it.
     assert database.read_bytes() == before
     manifest = json.loads((tmp_path / "out" / "b" / "manifest.json").read_text())
-    assert manifest["flipper_schema_version"] == 13
+    assert manifest["flipper_schema_version"] == 14
 
 
 def test_web_security_settings_never_enter_a_backup(tmp_path, monkeypatch):

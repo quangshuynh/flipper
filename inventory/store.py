@@ -11,13 +11,19 @@ from uuid import uuid4
 
 from deals.snapshots import canonical_snapshot_json, parse_snapshot_json, validate_snapshot_payload
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 VALID_STATUSES = ("acquired", "listed", "sold", "archived")
 SALE_COST_TYPES = ("marketplace_fee", "shipping_cost", "refund", "other_adjustment")
 SALE_COST_SOURCES = ("manual", "ebay_finances")
 SALE_COMPONENT_EFFECTS = ("reduce", "increase")
 RECONCILIATION_CATEGORIES = ("fees", "shipping", "refunds", "adjustments")
 ATTACHMENT_CATEGORIES = ("product_photo", "receipt", "supporting_document", "other")
+# Listing-draft conditions are chosen by the user; Flipper never infers one.
+LISTING_CONDITIONS = ("new", "open_box", "used", "for_parts")
+LISTING_DRAFT_STATUSES = frozenset({"acquired", "listed"})
+LISTING_TITLE_MAX = 80
+LISTING_DESCRIPTION_MAX = 5000
+LISTING_DEFECTS_MAX = 2000
 STATUS_TRANSITIONS = {
     "acquired": frozenset({"listed", "archived"}),
     "listed": frozenset({"acquired", "sold", "archived"}),
@@ -91,6 +97,10 @@ class ResearchSnapshotValidationError(ValueError):
 
 class SourcingTravelValidationError(ValueError):
     """Actual sourcing travel facts are invalid."""
+
+
+class ListingDraftValidationError(ValueError):
+    """A listing-preparation draft is invalid."""
 
 
 @dataclass(frozen=True)
@@ -302,6 +312,28 @@ class SourcingTravelRecord:
     def recorded_expense(self) -> Decimal:
         """Sum recorded expense facts for accounting; absent components add nothing."""
         return (self.fuel_cost or Decimal(0)) + (self.additional_expense or Decimal(0))
+
+
+@dataclass(frozen=True)
+class ListingDraftRecord:
+    """User-authored listing preparation for one Q item.
+
+    Drafts are working notes, not marketplace or accounting facts. Every amount is optional,
+    user-provided, exact integer USD cents; ``None`` means unknown, never zero.
+    """
+
+    inventory_internal_id: int
+    inventory_id: str
+    title: str
+    description: str
+    condition: str | None
+    defects: str
+    asking_price_cents: int | None
+    minimum_offer_cents: int | None
+    fee_rate_bps: int | None
+    fixed_fee_cents: int | None
+    shipping_cost_cents: int | None
+    updated_at: str
 
 
 def parse_usd_cents(value: str | Decimal) -> int:
@@ -880,6 +912,38 @@ class InventoryStore:
                 ):
                     connection.execute(f"ALTER TABLE sales ADD COLUMN {name} INTEGER")
                 connection.execute("INSERT INTO schema_migrations (version) VALUES (14)")
+            if 15 not in versions:
+                # Additive: one optional, user-authored listing draft per Q item. Existing tables
+                # and rows are untouched, and drafts never feed valuation or accounting.
+                connection.execute(
+                    """CREATE TABLE listing_drafts (
+                        inventory_internal_id INTEGER PRIMARY KEY,
+                        title TEXT NOT NULL DEFAULT '' CHECK (length(title) <= 80),
+                        description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 5000),
+                        condition TEXT CHECK (
+                            condition IS NULL
+                            OR condition IN ('new', 'open_box', 'used', 'for_parts')),
+                        defects TEXT NOT NULL DEFAULT '' CHECK (length(defects) <= 2000),
+                        asking_price_cents INTEGER CHECK (
+                            asking_price_cents IS NULL OR asking_price_cents >= 0),
+                        minimum_offer_cents INTEGER CHECK (
+                            minimum_offer_cents IS NULL OR minimum_offer_cents >= 0),
+                        fee_rate_bps INTEGER CHECK (
+                            fee_rate_bps IS NULL OR fee_rate_bps BETWEEN 0 AND 10000),
+                        fixed_fee_cents INTEGER CHECK (
+                            fixed_fee_cents IS NULL OR fixed_fee_cents >= 0),
+                        shipping_cost_cents INTEGER CHECK (
+                            shipping_cost_cents IS NULL OR shipping_cost_cents >= 0),
+                        updated_at TEXT NOT NULL CHECK (
+                            length(updated_at) = 20 AND substr(updated_at, 11, 1) = 'T'
+                            AND substr(updated_at, -1) = 'Z'),
+                        CHECK (minimum_offer_cents IS NULL OR asking_price_cents IS NULL
+                               OR minimum_offer_cents <= asking_price_cents),
+                        FOREIGN KEY (inventory_internal_id) REFERENCES inventory_items(internal_id)
+                            ON DELETE RESTRICT
+                    )"""
+                )
+                connection.execute("INSERT INTO schema_migrations (version) VALUES (15)")
             foreign_key_violation = connection.execute("PRAGMA foreign_key_check").fetchone()
             if foreign_key_violation is not None:
                 raise RuntimeError("inventory migration failed foreign-key integrity validation")
@@ -2675,6 +2739,149 @@ class InventoryStore:
                 (record.inventory_internal_id,),
             )
         return record
+
+    @staticmethod
+    def _draft_cents(value: str | Decimal | None, name: str) -> int | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            amount = Decimal(str(value).strip())
+        except (InvalidOperation, ValueError) as exc:
+            raise ListingDraftValidationError(f"{name} must be a USD amount") from exc
+        if not amount.is_finite() or amount < 0:
+            raise ListingDraftValidationError(f"{name} must be nonnegative")
+        cents = amount * 100
+        if cents != cents.to_integral_value():
+            raise ListingDraftValidationError(f"{name} must have at most two decimal places")
+        if cents > 10_000_000_000:
+            raise ListingDraftValidationError(f"{name} is too large")
+        return int(cents)
+
+    @staticmethod
+    def _fee_rate_bps(value: str | Decimal | None) -> int | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            percent = Decimal(str(value).strip())
+        except (InvalidOperation, ValueError) as exc:
+            raise ListingDraftValidationError("fee rate must be a percentage") from exc
+        if not percent.is_finite() or percent < 0 or percent > 100:
+            raise ListingDraftValidationError("fee rate must be between 0 and 100 percent")
+        bps = percent * 100
+        if bps != bps.to_integral_value():
+            raise ListingDraftValidationError("fee rate must have at most two decimal places")
+        return int(bps)
+
+    def get_listing_draft(self, inventory_id: str) -> ListingDraftRecord | None:
+        item = self.get(inventory_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT listing_drafts.*, inventory_items.inventory_id FROM listing_drafts "
+                "JOIN inventory_items ON inventory_items.internal_id = "
+                "listing_drafts.inventory_internal_id WHERE inventory_internal_id = ?",
+                (item.internal_id,),
+            ).fetchone()
+        return self._listing_draft_record(row) if row else None
+
+    def save_listing_draft(
+        self,
+        inventory_id: str,
+        *,
+        title: str = "",
+        description: str = "",
+        condition: str | None = None,
+        defects: str = "",
+        asking_price: str | Decimal | None = None,
+        minimum_offer: str | Decimal | None = None,
+        fee_rate_percent: str | Decimal | None = None,
+        fixed_fee: str | Decimal | None = None,
+        shipping_cost: str | Decimal | None = None,
+    ) -> ListingDraftRecord:
+        """Create or replace one item's listing draft.
+
+        Only the draft row changes: inventory identity, status, cost, valuations, and sales are
+        never written here, and nothing is sent to a marketplace.
+        """
+        item = self.get(inventory_id)
+        if item.status not in LISTING_DRAFT_STATUSES:
+            raise ListingDraftValidationError(
+                "listing drafts are available only for acquired or listed items"
+            )
+        cleaned_title = " ".join(title.split())
+        if len(cleaned_title) > LISTING_TITLE_MAX:
+            raise ListingDraftValidationError(
+                f"title must be {LISTING_TITLE_MAX} characters or fewer"
+            )
+        cleaned_description = description.replace("\r\n", "\n").strip()
+        if len(cleaned_description) > LISTING_DESCRIPTION_MAX:
+            raise ListingDraftValidationError(
+                f"description must be {LISTING_DESCRIPTION_MAX} characters or fewer"
+            )
+        cleaned_defects = defects.replace("\r\n", "\n").strip()
+        if len(cleaned_defects) > LISTING_DEFECTS_MAX:
+            raise ListingDraftValidationError(
+                f"known defects must be {LISTING_DEFECTS_MAX} characters or fewer"
+            )
+        selected_condition = (condition or "").strip() or None
+        if selected_condition is not None and selected_condition not in LISTING_CONDITIONS:
+            raise ListingDraftValidationError("condition must be a recognized value")
+        asking = self._draft_cents(asking_price, "asking price")
+        minimum = self._draft_cents(minimum_offer, "minimum acceptable offer")
+        if asking is not None and minimum is not None and minimum > asking:
+            raise ListingDraftValidationError(
+                "minimum acceptable offer cannot exceed the asking price"
+            )
+        fee_rate = self._fee_rate_bps(fee_rate_percent)
+        fixed = self._draft_cents(fixed_fee, "fixed fee")
+        shipping = self._draft_cents(shipping_cost, "shipping cost")
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO listing_drafts (
+                    inventory_internal_id, title, description, condition, defects,
+                    asking_price_cents, minimum_offer_cents, fee_rate_bps, fixed_fee_cents,
+                    shipping_cost_cents, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(inventory_internal_id) DO UPDATE SET
+                    title=excluded.title, description=excluded.description,
+                    condition=excluded.condition, defects=excluded.defects,
+                    asking_price_cents=excluded.asking_price_cents,
+                    minimum_offer_cents=excluded.minimum_offer_cents,
+                    fee_rate_bps=excluded.fee_rate_bps,
+                    fixed_fee_cents=excluded.fixed_fee_cents,
+                    shipping_cost_cents=excluded.shipping_cost_cents,
+                    updated_at=excluded.updated_at""",
+                (
+                    item.internal_id,
+                    cleaned_title,
+                    cleaned_description,
+                    selected_condition,
+                    cleaned_defects,
+                    asking,
+                    minimum,
+                    fee_rate,
+                    fixed,
+                    shipping,
+                    self._utc_now(),
+                ),
+            )
+        return self.get_listing_draft(item.inventory_id)  # type: ignore[return-value]
+
+    @staticmethod
+    def _listing_draft_record(row: sqlite3.Row) -> ListingDraftRecord:
+        return ListingDraftRecord(
+            inventory_internal_id=row["inventory_internal_id"],
+            inventory_id=row["inventory_id"],
+            title=row["title"],
+            description=row["description"],
+            condition=row["condition"],
+            defects=row["defects"],
+            asking_price_cents=row["asking_price_cents"],
+            minimum_offer_cents=row["minimum_offer_cents"],
+            fee_rate_bps=row["fee_rate_bps"],
+            fixed_fee_cents=row["fixed_fee_cents"],
+            shipping_cost_cents=row["shipping_cost_cents"],
+            updated_at=row["updated_at"],
+        )
 
     @staticmethod
     def _sourcing_travel_record(row: sqlite3.Row) -> SourcingTravelRecord:

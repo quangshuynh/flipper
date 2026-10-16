@@ -299,6 +299,7 @@ def test_v3_database_migrates_to_sales_schema(tmp_path):
             (12,),
             (13,),
             (14,),
+            (15,),
         ]
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sales'"

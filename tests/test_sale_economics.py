@@ -141,6 +141,7 @@ def test_v4_migration_preserves_sale_and_starts_with_zero_components(tmp_path):
             (12,),
             (13,),
             (14,),
+            (15,),
         ]
 
 
