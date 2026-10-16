@@ -6,8 +6,8 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0e1016",
-  "theme_color": "#0e1016",
+  "background_color": "#eef6ff",
+  "theme_color": "#dceeff",
   "icons": [
     {
       "src": "/static/flipper-logo2.png",
