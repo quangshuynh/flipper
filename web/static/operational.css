@@ -9,7 +9,9 @@
 .dash-welcome{padding-right:7rem}.dash-welcome p{max-width:52ch;margin:0 0 1rem;color:var(--ink-2)}
 .dash-welcome .form-actions{position:relative;z-index:1}
 .dash-welcome::after{content:"";position:absolute;right:-2.4rem;bottom:-2.4rem;width:7.5rem;height:7.5rem;border:var(--stroke) solid var(--yellow);border-radius:50%;background:var(--yellow);box-shadow:inset 0 0 0 1.1rem var(--sky),inset 0 0 0 calc(1.1rem + var(--stroke)) var(--yellow);opacity:.9}
-.status-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.5rem;margin:0}
+.dash-attention .attention-grid{grid-template-columns:1fr 1fr;gap:.6rem}.dash-attention .attention-grid a{min-height:84px;padding:.75rem .9rem}.dash-attention .attention-grid strong{font-size:1.6rem}.dash-attention .panel-head p{margin-bottom:.8rem}
+.dash-money{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);gap:1rem;align-items:start;margin-bottom:1rem}.dash-money>.panel{margin:0}
+.status-strip{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin:0}
 .status-strip div{display:grid;gap:.15rem;padding:.75rem .8rem;border:var(--stroke) solid var(--line);border-radius:var(--radius-sm);background:var(--paper)}
 .status-strip dt{order:2;color:var(--ink-2);font-size:.75rem;font-weight:750}
 .status-strip dd{order:1;margin:0;font:900 1.6rem/1 var(--font-display)}
@@ -126,7 +128,7 @@ details summary{color:var(--ink);font-weight:800;cursor:pointer}
 .prep-limit{padding:.85rem 1rem;border:var(--stroke) dashed var(--line-soft);border-radius:var(--radius-sm);background:var(--unknown-soft);color:var(--unknown-ink)}
 .prep-limit strong{color:var(--ink)}
 
-@media(max-width:1360px){.deal-search{grid-template-columns:repeat(3,minmax(0,1fr))}.search-wide{grid-column:span 2}}@media(max-width:1100px){.deal-grid{grid-template-columns:1fr 1fr}.dash-hero{grid-template-columns:1fr}}
+@media(max-width:1360px){.deal-search{grid-template-columns:repeat(3,minmax(0,1fr))}.search-wide{grid-column:span 2}}@media(max-width:1100px){.deal-grid{grid-template-columns:1fr 1fr}.dash-hero,.dash-money{grid-template-columns:1fr}}
 @media(max-width:900px){.attention-grid{grid-template-columns:1fr 1fr}.deal-layout,.prep-layout{grid-template-columns:1fr}.money-headlines{grid-template-columns:1fr}}
 @media(max-width:650px){.dash-welcome{padding-right:1rem}.deal-search,.deal-grid,.economics-grid{grid-template-columns:1fr}.search-wide{grid-column:auto}.deal-hero{grid-template-columns:1fr}.asking{justify-items:start;text-align:left}.card-actions{align-items:stretch;flex-direction:column}.deals-intro{grid-template-columns:1fr}.status-strip{grid-template-columns:1fr 1fr}.dash-welcome::after{display:none}}
 @media(max-width:520px){.attention-grid{grid-template-columns:1fr 1fr;gap:.5rem}.attention-grid a{min-height:0;padding:.8rem .8rem 1.8rem;font-size:.86rem}.attention-grid strong{font-size:1.6rem}}

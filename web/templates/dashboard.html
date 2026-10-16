@@ -3,14 +3,13 @@
 {% set inv = report.inventory %}{% set sales = report.sales %}
 <section class="dash-hero" aria-label="Today">
   <div class="panel dash-welcome"><p class="eyebrow">Daily workspace</p><h2>{% if attention.acquired or attention.unreconciled_sales %}A few things are waiting on you.{% else %}Shelf is tidy. Go find the next flip.{% endif %}</h2><p>Every number here comes from your local records. Research estimates stay in Deals until you buy something.</p><div class="form-actions"><a class="button" href="/deals">Find a deal</a><a class="button secondary" href="/inventory?status=acquired">List what you bought</a><a class="button secondary" href="/sales">Reconcile sales</a></div></div>
-  <div class="panel"><div class="panel-head"><div><h2>Inventory status</h2><p>Lifecycle counts across every Q-number.</p></div><a href="/inventory">Open inventory</a></div>
-  <dl class="status-strip" aria-label="Inventory by lifecycle status">
-    <div><dt>Acquired</dt><dd>{{ inv.status_counts.get('acquired', 0) }}</dd></div>
-    <div><dt>Listed</dt><dd>{{ inv.status_counts.get('listed', 0) }}</dd></div>
-    <div><dt>Sold</dt><dd>{{ inv.status_counts.get('sold', 0) }}</dd></div>
-    <div><dt>Archived</dt><dd>{{ inv.status_counts.get('archived', 0) }}</dd></div>
-  </dl>
-  <p class="status-foot">Active means acquired or listed. Archived items are kept, never deleted.</p></div>
+  <div class="panel dash-attention"><div class="panel-head"><div><h2>Needs attention</h2><p>Deterministic checks from local durable data only.</p></div></div>
+<div class="attention-grid" aria-label="Items needing attention">
+  <a href="/inventory?status=acquired"{% if not attention.acquired %} class="is-clear"{% endif %}><strong>{{ attention.acquired|length }}</strong><span>Acquired, not yet listed</span></a>
+  <a href="/inventory?status=listed&amp;linkage=unlinked"{% if not attention.unlinked %} class="is-clear"{% endif %}><strong>{{ attention.unlinked|length }}</strong><span>Listed without complete marketplace linkage</span></a>
+  <a href="/inventory"{% if not attention.missing_attachments %} class="is-clear"{% endif %}><strong>{{ attention.missing_attachments|length }}</strong><span>Active items without attachments</span></a>
+  <a href="/sales"{% if not attention.unreconciled_sales %} class="is-clear"{% endif %}><strong>{{ attention.unreconciled_sales|length }}</strong><span>Sales not fully reconciled</span></a>
+</div></div>
 </section>
 <section class="metrics" aria-label="Business snapshot">
   <article class="metric-primary"><span>Active inventory</span><strong>{{ inv.active_count }}</strong><small>{{ inv.active_capital_usd|money }} tied up</small></article>
@@ -18,13 +17,7 @@
   <article><span>Sales on record</span><strong>{{ sales.rows|length }}</strong><small>{{ sales.reconciliation_counts.get('incomplete', 0) }} incomplete · {{ sales.reconciliation_counts.get('partially_reconciled', 0) }} partial</small></article>
   <article class="{{ 'metric-attention' if attention.unreconciled_sales else 'metric-profit' }}"><span>Needs reconciliation</span><strong>{{ attention.unreconciled_sales|length }}</strong><small>{% if attention.unreconciled_sales %}Profit stays provisional until reviewed{% else %}Every recorded sale is reconciled{% endif %}</small></article>
 </section>
-<section class="panel"><div class="panel-head"><div><h2>Needs attention</h2><p>Deterministic checks from local durable data only.</p></div></div>
-<div class="attention-grid" aria-label="Items needing attention">
-  <a href="/inventory?status=acquired"{% if not attention.acquired %} class="is-clear"{% endif %}><strong>{{ attention.acquired|length }}</strong><span>Acquired, not yet listed</span></a>
-  <a href="/inventory?status=listed&amp;linkage=unlinked"{% if not attention.unlinked %} class="is-clear"{% endif %}><strong>{{ attention.unlinked|length }}</strong><span>Listed without complete marketplace linkage</span></a>
-  <a href="/inventory"{% if not attention.missing_attachments %} class="is-clear"{% endif %}><strong>{{ attention.missing_attachments|length }}</strong><span>Active items without attachments</span></a>
-  <a href="/sales"{% if not attention.unreconciled_sales %} class="is-clear"{% endif %}><strong>{{ attention.unreconciled_sales|length }}</strong><span>Sales not fully reconciled</span></a>
-</div></section>
+<div class="dash-money">
 <section class="panel economics-panel"><div class="panel-head"><div><h2>Sales economics</h2><p>Recorded results; incomplete economics are not final.</p></div><a href="/sales">All sales</a></div>
 {% if sales.gross_by_currency %}<div class="money-cards currency-grid">{% for currency, gross in sales.gross_by_currency|dictsort %}{% set realized = sales.fully_reconciled_profit_by_currency.get(currency) %}{% set recorded = sales.recorded_profit_by_currency.get(currency) %}<article class="money-card"><header><span class="badge">{{ currency }}</span><small class="muted">{{ sales.rows|selectattr('sale.currency', 'equalto', currency)|list|length }} sale(s)</small></header>
   <dl class="money-headlines">
@@ -34,6 +27,15 @@
   </dl>
   <dl class="detail-list"><div><dt>Gross proceeds</dt><dd>{{ gross|money(currency) }}</dd></div>{% if currency == 'USD' %}<div><dt>Acquisition cost (COGS)</dt><dd>{{ sales.acquisition_cost_usd|money }}</dd></div>{% endif %}<div><dt>Recorded fees / shipping / refunds</dt><dd>{{ sales.reducing_by_currency.get(currency, 0)|money(currency) }}</dd></div><div><dt>Recorded credits</dt><dd>{{ sales.increasing_by_currency.get(currency, 0)|money(currency) }}</dd></div><div><dt>Recorded profit (includes provisional)</dt><dd>{{ recorded|money(currency) }}</dd></div><div><dt>Fully reconciled realized profit</dt><dd>{{ realized|money(currency) }}</dd></div><div><dt>Recorded margin (includes provisional)</dt><dd>{{ sales.aggregate_margin_by_currency.get(currency)|percent }}</dd></div></dl></article>{% endfor %}</div>{% else %}<div class="empty"><h3>No sales yet</h3><p>Imported sales will appear here with their recorded economics.</p></div>{% endif %}
 </section>
+<section class="panel"><div class="panel-head"><h2>Inventory status</h2><a href="/inventory">Open inventory</a></div>
+  <dl class="status-strip" aria-label="Inventory by lifecycle status">
+    <div><dt>Acquired</dt><dd>{{ inv.status_counts.get('acquired', 0) }}</dd></div>
+    <div><dt>Listed</dt><dd>{{ inv.status_counts.get('listed', 0) }}</dd></div>
+    <div><dt>Sold</dt><dd>{{ inv.status_counts.get('sold', 0) }}</dd></div>
+    <div><dt>Archived</dt><dd>{{ inv.status_counts.get('archived', 0) }}</dd></div>
+  </dl>
+  <p class="status-foot">Lifecycle counts across every Q-number. Active means acquired or listed; archived items are kept, never deleted.</p></section>
+</div>
 <section class="panel"><div class="panel-head"><div><h2>Workflow</h2><p>Move from a saved decision to its authoritative result.</p></div></div>
 <div class="workflow-links" aria-label="Reseller workflow">
   <a href="/deals"><span>Research</span><strong>Find and evaluate a deal</strong></a>

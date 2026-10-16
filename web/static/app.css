@@ -118,7 +118,7 @@ main{width:100%;max-width:1480px;margin:0 auto;padding:var(--space)}
 input,select{min-height:42px;padding:.5rem .75rem;border:var(--stroke) solid var(--line);border-radius:var(--radius-xs);background:var(--deep);color:var(--ink);font:inherit}
 input[type=checkbox],input[type=radio]{accent-color:var(--violet);width:1.1rem;height:1.1rem}
 input::placeholder,textarea::placeholder{color:#7d8496}
-input:invalid:not(:placeholder-shown),textarea:invalid:not(:placeholder-shown){border-color:var(--loss-ink)}
+input:user-invalid,select:user-invalid,textarea:user-invalid{border-color:var(--loss-ink)}
 .filters input{min-width:250px}
 fieldset{margin:0;padding:1rem;border:var(--stroke) solid var(--line-soft);border-radius:var(--radius-sm)}
 legend{padding:0 .4rem;font-weight:800}

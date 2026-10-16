@@ -67,7 +67,7 @@
 {% elif searched and not error %}
 <section class="panel empty"><h2>No opportunities returned</h2><p>Try broader keywords or fewer filters.</p></section>
 {% elif not searched %}
-<section class="panel empty"><h2>Start with a deliberate search</h2><p>Search eBay or add an opportunity. Flipper contacts eBay only when you submit the search.</p></section>
+{% if manual_opportunities %}<p class="muted search-hint">Start with a deliberate search above. Flipper contacts eBay only when you submit the search.</p>{% else %}<section class="panel empty"><h2>Start with a deliberate search</h2><p>Search eBay or add an opportunity. Flipper contacts eBay only when you submit the search.</p></section>{% endif %}
 {% endif %}
 {% else %}
 <section class="panel sold-research">
