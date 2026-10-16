@@ -183,7 +183,7 @@ route classification is unchanged.
 2. In Render: **New → Blueprint**, select this repository, and review that only `flipper-app` will
    be created. Enter the secrets. For `FLIPPER_PUBLIC_ORIGIN`, if you do not know the final URL
    yet, enter `https://flipper-app.onrender.com` and correct it after creation (step 4).
-3. Wait for the deploy. Starting hosted mode with an empty disk creates a new, empty schema-v14
+3. Wait for the deploy. Starting hosted mode with an empty disk creates a new, empty schema-v15
    database at `/var/data/flipper/flipper_inventory.db`.
 4. If the actual URL differs, update `FLIPPER_PUBLIC_ORIGIN` (Render redeploys).
 5. From your computer, run the read-only security smoke:
@@ -282,13 +282,13 @@ flipper backup fingerprint /var/data/flipper-live/flipper_inventory.db
 ```
 
 The fingerprint must equal the source fingerprint recorded on your computer, and
-`verify-restore` must report equivalence (integrity, foreign keys, schema v14, migration history,
+`verify-restore` must report equivalence (integrity, foreign keys, schema v15, migration history,
 row counts, Q/S/C counters, fingerprint, attachment hashes). If anything differs, **stop**. Do not
 edit records to make them match.
 
 Then set `FLIPPER_DATA_DIR=/var/data/flipper-live` in Render's environment. Render stops the old
 instance before it starts the new one, so the database is never replaced underneath a running
-server. The entrypoint gives the new directory to the app user, and startup finds schema v14
+server. The entrypoint gives the new directory to the app user, and startup finds schema v15
 already current, so no data changes.
 
 After the restart, run the same `verify-restore` and `fingerprint` commands again. The fingerprint

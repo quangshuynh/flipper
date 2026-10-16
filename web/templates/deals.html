@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% macro score_card(score) %}
-<section class="deal-score-card" aria-label="Deal Score">
+<section class="deal-score-card {{ 'is-available' if score.available else 'is-unavailable' }}" aria-label="Deal Score">
   <span>Deal Score</span>
   {% if score.available %}
   <strong>{{ score.value }} / 10</strong>
@@ -14,10 +14,10 @@
 {% endmacro %}
 {% block content %}
 <section class="deals-intro panel">
-  <p class="eyebrow">Multi-source opportunity workspace</p>
+  <div><p class="eyebrow">Multi-source opportunity workspace</p>
   <h2>Find opportunities. Supply the assumptions. Keep the evidence honest.</h2>
-  <p>Research active opportunities separately from sold comparable evidence. Asking prices are source facts, not resale estimates or sold prices.</p>
-  <div class="card-actions"><a class="button" href="/deals/opportunities/new">Add Opportunity</a></div>
+  <p>Research active opportunities separately from sold comparable evidence. Asking prices are source facts, not resale estimates or sold prices.</p></div>
+  <div class="card-actions"><a class="button accent" href="/deals/opportunities/new">Add Opportunity</a></div>
 </section>
 <nav class="listing-mode" aria-label="Research mode">
   <span>Research mode</span>
@@ -44,16 +44,17 @@
     {% set key = 'ebay:' ~ opportunity.source_listing_id %}
     <article class="deal-card">
       <label class="compare-select"><input type="checkbox" name="opportunity_key" value="{{ key }}"> Add to comparison</label>
-      <div class="deal-card-head"><span class="badge matched">eBay API</span><span>{{ opportunity.category.label }}</span></div>
+      <div class="deal-card-head"><span class="badge source">eBay API</span><span>{{ opportunity.category.label }}</span></div>
+      <div class="deal-photo"><span>No photo in Flipper · view the source listing</span></div>
       <h2><a href="/deals/ebay/{{ opportunity.source_listing_id }}">{{ opportunity.title }}</a></h2>
+      <p class="deal-price"><strong>{{ opportunity.base_price.amount|money(opportunity.base_price.currency) }}</strong><small>Asking price · source fact</small></p>
       <dl class="deal-facts">
-        <div><dt>Asking price</dt><dd>{{ opportunity.base_price.amount|money(opportunity.base_price.currency) }}</dd></div>
         <div><dt>Inbound shipping</dt><dd>{% if shipping.money %}{{ shipping.money.amount|money(shipping.money.currency) }}{% else %}Unknown{% endif %}</dd></div>
         <div><dt>Condition</dt><dd>{{ opportunity.condition or 'Unknown' }}</dd></div>
         <div><dt>Source location</dt><dd>{{ opportunity.location_text or 'Unknown' }}</dd></div>
       </dl>
       {% if card_scores[key].frozen %}
-      <div class="evidence-strip"><strong>Saved evaluation available</strong><span>Latest immutable research snapshot</span></div>
+      <div class="evidence-strip saved"><strong>Saved evaluation available</strong><span>Latest immutable research snapshot</span></div>
       {% else %}
       <div class="evidence-strip"><strong>Needs resale estimate</strong><span>{{ opportunity.category_provenance.label }}</span></div>
       {% endif %}
@@ -66,7 +67,7 @@
 {% elif searched and not error %}
 <section class="panel empty"><h2>No opportunities returned</h2><p>Try broader keywords or fewer filters.</p></section>
 {% elif not searched %}
-<section class="panel empty"><h2>Start with a deliberate search</h2><p>Search eBay or add an opportunity. Flipper contacts eBay only when you submit the search.</p></section>
+{% if manual_opportunities %}<p class="muted search-hint">Start with a deliberate search above. Flipper contacts eBay only when you submit the search.</p>{% else %}<section class="panel empty"><h2>Start with a deliberate search</h2><p>Search eBay or add an opportunity. Flipper contacts eBay only when you submit the search.</p></section>{% endif %}
 {% endif %}
 {% else %}
 <section class="panel sold-research">
@@ -90,11 +91,12 @@
       {% set key = 'manual:' ~ opportunity_id %}
       <article class="deal-card">
         {% if listing_mode == listing_modes.ACTIVE %}<label class="compare-select"><input type="checkbox" name="opportunity_key" value="{{ key }}"> Add to comparison</label>{% endif %}
-        <div class="deal-card-head"><span class="badge matched">{{ stored.opportunity.source.value|replace('-', ' ')|title }}</span><span>User-provided</span></div>
+        <div class="deal-card-head"><span class="badge source">{{ stored.opportunity.source.value|replace('-', ' ')|title }}</span><span>User-provided</span></div>
         <h2><a href="/deals/opportunities/{{ opportunity_id }}">{{ stored.opportunity.title }}</a></h2>
-        <p>{{ stored.opportunity.base_price.amount|money(stored.opportunity.base_price.currency) }} · {{ stored.opportunity.category.label }}</p>
+        <p class="deal-price"><strong>{{ stored.opportunity.base_price.amount|money(stored.opportunity.base_price.currency) }}</strong><small>Asking price · {{ stored.opportunity.category.label }}</small></p>
+        <dl class="deal-facts"><div><dt>Condition</dt><dd>{{ stored.opportunity.condition|replace('_', ' ')|capitalize if stored.opportunity.condition else 'Unknown' }}</dd></div><div><dt>Location</dt><dd>{{ stored.opportunity.location_text or 'Unknown' }}</dd></div></dl>
         {% if card_scores[key].frozen %}
-        <div class="evidence-strip"><strong>Saved evaluation available</strong><span>Latest immutable research snapshot</span></div>
+        <div class="evidence-strip saved"><strong>Saved evaluation available</strong><span>Latest immutable research snapshot</span></div>
         {% else %}
         <div class="evidence-strip"><strong>Needs resale estimate</strong><span>Record assumptions and sold evidence</span></div>
         {% endif %}
@@ -103,7 +105,7 @@
       </article>
     {% endfor %}
     </section>
-    {% if listing_mode == listing_modes.ACTIVE %}<button type="submit">Compare selected</button>{% endif %}
+    {% if listing_mode == listing_modes.ACTIVE %}<div class="result-head"><span>Choose 2–4 cards, then compare them side by side.</span><button type="submit">Compare selected</button></div>{% endif %}
   </form>
 </section>
 {% endif %}

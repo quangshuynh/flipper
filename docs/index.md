@@ -20,6 +20,7 @@ Research → Save Snapshot → Acquire → Inventory → Sale / Reconciliation �
 | [Deal Intelligence](concepts/deal-intelligence.md) | Exact expected economics, evidence, risk, and tradeoffs |
 | [eBay Discovery](guides/ebay-discovery.md) | Live read-only search, assumptions, and acquisition boundary |
 | [Inventory](guides/inventory-attachments.md) | Q-numbers, lifecycle, attachments, and valuations |
+| [Quick Listing Prep](guides/listing-prep.md) | Titles, condition, defects, and pricing for an item you own |
 | [Selling](guides/sales-accounting.md) | Sales, costs, reconciliation, and reports |
 | [Architecture](development/architecture.md) | Domain boundaries and service layout |
 | [Development](development/testing-migrations.md) | Tests, formatting, and migrations |
@@ -32,7 +33,8 @@ Research an opportunity in **Deals**, adding explicit assumptions, trip modeling
 evidence as needed. Working research remains temporary until you choose **Save research snapshot**.
 After a purchase, record actual acquisition facts to create the authoritative inventory Q-item.
 
-Track that item in **Inventory**, including actual sourcing travel and attachments. Record or import
+Track that item in **Inventory**, including actual sourcing travel and attachments, and use
+**Prepare listing** to draft its title, description, and price. Record or import
 the sale and reconcile its costs in **Sales**. When saved research is explicitly linked to the
 Q-item, open **Decision vs. Outcome** from the snapshot, inventory item, or related sale. **Insights**
 then summarizes eligible historical realized results; it is descriptive history, not a forecast or
