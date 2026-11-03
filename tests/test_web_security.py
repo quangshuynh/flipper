@@ -58,6 +58,7 @@ EXPECTED_ROUTES = {
     ("GET", "/sales"): READ,
     ("GET", "/sales/{sale_id}"): READ,
     ("POST", "/sales/{sale_id}/accounting"): MUTATION,
+    ("GET", "/exports/{dataset}.csv"): READ,
     ("GET", "/analytics"): READ,
     ("GET", "/insights"): READ,
     ("GET", "/analyze"): READ,
@@ -87,7 +88,12 @@ EXPECTED_ROUTES = {
     ("POST", "/ebay/listings/sync"): MUTATION,
     ("POST", "/ebay/listings/import"): MUTATION,
 }
-SAMPLE_PARAMETERS = {"inventory_id": "Q0001", "sale_id": "S000001", "snapshot_id": "R000001"}
+SAMPLE_PARAMETERS = {
+    "inventory_id": "Q0001",
+    "sale_id": "S000001",
+    "snapshot_id": "R000001",
+    "dataset": "sales",
+}
 # Plausible bodies so a missing boundary would actually reach and exercise domain code.
 SAMPLE_FORMS = {
     "/inventory/{inventory_id}/notes": {"notes": "attacker note"},

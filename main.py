@@ -5,6 +5,7 @@ import os
 import secrets
 import sqlite3
 import sys
+import tempfile
 import warnings
 import webbrowser
 from collections.abc import Callable
@@ -76,6 +77,7 @@ from inventory.store import (
     ValuationValidationError,
 )
 from notifier.discord_notifier import send_deal_to_discord
+from reports.csv_export import EXPORTS
 from reports.service import (
     build_summary_report,
     inventory_report,
@@ -618,6 +620,13 @@ def build_parser() -> argparse.ArgumentParser:
             "--to", dest="end", type=_parse_date, help="inclusive date (YYYY-MM-DD)"
         )
     report_commands.add_parser("valuation", help="show baseline estimate accuracy")
+    export = report_commands.add_parser(
+        "export", help="write a deterministic CSV export of local inventory or sales"
+    )
+    export.add_argument("dataset", choices=sorted(EXPORTS))
+    export.add_argument(
+        "--output", type=Path, help="CSV file to write atomically; defaults to standard output"
+    )
     auth = commands.add_parser(
         "auth", help="generate web sign-in configuration values (never stored by Flipper)"
     )
@@ -1476,6 +1485,8 @@ def _print_valuation_report(report) -> None:
 def run_reports_command(args: argparse.Namespace) -> int:
     try:
         store = InventoryStore(args.database)
+        if args.report_command == "export":
+            return _write_export(EXPORTS[args.dataset](store), args.output)
         if args.report_command == "valuation":
             _print_valuation_report(valuation_accuracy_report(store))
             return 0
@@ -1501,9 +1512,28 @@ def run_reports_command(args: argparse.Namespace) -> int:
             )
             _print_sales_report(report)
         return 0
-    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+    except (ValueError, RuntimeError, sqlite3.Error, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+
+def _write_export(content: bytes, output: Path | None) -> int:
+    """Write a fully built export; a file target is replaced atomically or left untouched."""
+    if output is None:
+        sys.stdout.buffer.write(content)
+        sys.stdout.flush()
+        return 0
+    output.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(prefix=f".{output.name}.", dir=output.parent)
+    try:
+        with os.fdopen(handle, "wb") as file:
+            file.write(content)
+        os.replace(temporary, output)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    print(f"Wrote {output}", file=sys.stderr)
+    return 0
 
 
 _VERIFY_EXIT_CODES = {
