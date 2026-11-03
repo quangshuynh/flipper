@@ -92,13 +92,21 @@ from web.passwords import PasswordPolicyError, hash_password
 EBAY_NOW_SAFETY_MARGIN = timedelta(minutes=5)
 
 
-def run() -> None:
+def run() -> int:
     """
     Execute one Flipper scan cycle.
 
-    :returns: None.
+    The feed is read and validated before the dedupe database is touched, so a missing or
+    malformed feed exits with an actionable error and no local writes.
+
+    :returns: Process exit status.
     """
     load_dotenv()
+    try:
+        listings = fetch_listings()
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     init_db()
 
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
@@ -111,7 +119,6 @@ def run() -> None:
     if not webhook_url:
         print("DISCORD_WEBHOOK_URL is not configured; alerts are disabled.")
 
-    listings = fetch_listings()
     print(f"Fetched {len(listings)} listings.\n")
 
     for listing in listings:
@@ -170,6 +177,7 @@ def run() -> None:
                 f"< {min_profit:.2f} or score {deal.score} < {min_score})"
             )
             mark_seen(listing.listing_id)
+    return 0
 
 
 def _seller_oauth() -> SellerOAuthClient:
@@ -1678,8 +1686,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_auth_command(args)
     if args.command == "web":
         return run_web_command(args)
-    run()
-    return 0
+    return run()
 
 
 if __name__ == "__main__":

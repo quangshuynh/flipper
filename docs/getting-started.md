@@ -24,8 +24,10 @@ the runtime dependencies.
 ## First analysis
 
 `python main.py` reads `data/listings.json`. A feed is a JSON array of listing objects with an ID,
-title, description, asking price, URL, location, and optional distance. The bundled fixture is safe
-for trying the deterministic pipeline. See [Analysis](guides/analysis.md) before using your own data.
+title, description, asking price, URL, location, and optional distance, or an object of the form
+`{"listings": [...]}`. Other shapes, such as an object without a `listings` array, and invalid JSON
+are rejected with an error that names the file, and nothing is written. `[]` and `{"listings": []}`
+are valid empty feeds. The bundled fixture is safe for trying the deterministic pipeline. See [Analysis](guides/analysis.md) before using your own data.
 
 ## Web application
 

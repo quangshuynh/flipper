@@ -111,6 +111,70 @@ def _build_listing(item: dict[str, Any], index: int) -> Listing:
     )
 
 
+_EXPECTED_SHAPE = 'a top-level list of listings or an object like {"listings": [...]}'
+_MAX_REPORTED_KEYS = 10
+
+
+def _json_type_name(value: Any) -> str:
+    """
+    Name a decoded JSON value by its JSON type.
+
+    :param value: Decoded JSON value.
+    :returns: JSON type name.
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    return "object"
+
+
+def _feed_entries(raw: Any, path: Path) -> list[Any]:
+    """
+    Validate the top-level feed shape and return its raw listing entries.
+
+    :param raw: Decoded JSON document.
+    :param path: Feed path, named in errors.
+    :returns: Raw listing entries.
+    :raises ValueError: When the document is not a supported feed shape.
+    """
+    if isinstance(raw, list):
+        return raw
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"JSON feed {path} must contain {_EXPECTED_SHAPE}; got {_json_type_name(raw)}"
+        )
+    if "listings" not in raw:
+        keys = sorted(raw)
+        if not keys:
+            found = "found an empty object"
+        else:
+            shown = ", ".join(keys[:_MAX_REPORTED_KEYS])
+            more = (
+                f" and {len(keys) - _MAX_REPORTED_KEYS} more"
+                if len(keys) > _MAX_REPORTED_KEYS
+                else ""
+            )
+            found = f"found keys: {shown}{more}"
+        raise ValueError(
+            f"JSON feed {path} is an object without a 'listings' key ({found}); "
+            f"expected {_EXPECTED_SHAPE}"
+        )
+    listings = raw["listings"]
+    if not isinstance(listings, list):
+        raise ValueError(
+            f"JSON feed {path} 'listings' is {_json_type_name(listings)}; "
+            'expected a list of listing objects, like {"listings": [...]}'
+        )
+    return listings
+
+
 def fetch_listings(json_path: str | Path = DEFAULT_JSON_PATH) -> List[Listing]:
     """
     Read listings from a JSON file.
@@ -134,8 +198,15 @@ def fetch_listings(json_path: str | Path = DEFAULT_JSON_PATH) -> List[Listing]:
       }
     ]
 
+    A top-level object without a "listings" key, a non-list "listings" value, any other
+    top-level JSON type, and unparseable JSON are rejected with a ValueError naming the file.
+    ``{"listings": []}`` and ``[]`` are valid empty feeds. Individual entries that are not
+    objects or have invalid prices are skipped as before.
+
     :param json_path: Path to JSON file.
     :returns: List of Listing objects.
+    :raises FileNotFoundError: When the feed file does not exist.
+    :raises ValueError: When the feed is not valid JSON or not a supported shape.
     """
     path = Path(json_path)
 
@@ -143,24 +214,17 @@ def fetch_listings(json_path: str | Path = DEFAULT_JSON_PATH) -> List[Listing]:
         raise FileNotFoundError(f"JSON feed not found: {path}")
 
     with path.open("r", encoding="utf-8") as f:
-        raw = json.load(f)
+        try:
+            raw = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"JSON feed {path} is not valid JSON: {exc.msg} "
+                f"(line {exc.lineno}, column {exc.colno})"
+            ) from exc
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"JSON feed {path} is not UTF-8 text: {exc.reason}") from exc
 
-    if isinstance(raw, dict):
-        if "listings" not in raw:
-            raise ValueError(
-                "JSON feed object must contain a 'listings' key (got keys: %s)"
-                % ", ".join(sorted(raw.keys()))
-                or "(empty object)"
-            )
-        if not isinstance(raw["listings"], list):
-            raise ValueError(
-                "JSON feed 'listings' must be a list, got %s" % type(raw["listings"]).__name__
-            )
-        raw_listings = raw["listings"]
-    elif isinstance(raw, list):
-        raw_listings = raw
-    else:
-        raise ValueError("JSON file must contain a list or a dict with 'listings'.")
+    raw_listings = _feed_entries(raw, path)
 
     listings: List[Listing] = []
     for i, item in enumerate(raw_listings):
