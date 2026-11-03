@@ -8,7 +8,7 @@ arguments. The main areas are:
 | default pipeline / `acquire` | Analyze exported listings; explicitly record an acquisition |
 | `inventory` | Inspect and maintain local items, lifecycle, valuations, and attachments |
 | `sales` | Inspect sales, costs, and reconciliation confirmations |
-| `reports` | Summary, inventory, and sales reports |
+| `reports` | Summary, inventory, and sales reports; `reports export` writes [CSV exports](../guides/data-export.md) |
 | `backup` | Create, verify, and restore database + attachment backups; logical fingerprints |
 | `auth` | Generate the web owner-password hash and session secret (prints only) |
 | `web lan` | Serve the web app to a phone on this trusted private network (sign-in required) |

@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlencode
 
 from fastapi import HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import pass_context
 from dotenv import load_dotenv
@@ -88,6 +88,7 @@ from inventory.store import (
     SaleCostValidationError,
     SaleNotFoundError,
 )
+from reports.csv_export import EXPORTS, ExportError
 from reports.service import (
     build_summary_report,
     historical_insights,
@@ -990,6 +991,33 @@ def sales_page(request: Request, state: str = ""):
         title="Sales",
         rows=rows,
         state=state,
+    )
+
+
+@app.get("/exports/{dataset}.csv")
+def export_csv(request: Request, dataset: str):
+    """Download a complete, read-only CSV projection of authoritative local records."""
+    exporter = EXPORTS.get(dataset)
+    if exporter is None:
+        raise HTTPException(status_code=404, detail="Export not found")
+    try:
+        content = exporter(_store())
+    except ExportError as exc:
+        return _render(
+            request,
+            "error.html",
+            section="",
+            title="Export failed",
+            message=f"No file was produced and no records were changed. {exc}",
+            status_code=500,
+        )
+    return Response(
+        content,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="flipper-{dataset}.csv"',
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

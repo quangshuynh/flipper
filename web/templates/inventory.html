@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% block content %}
+{% extends "base.html" %}{% block actions %}<div class="page-actions"><a class="button secondary" href="/exports/inventory.csv" download>Export CSV</a></div>{% endblock %}{% block content %}
 <form class="filters" method="get">
   <label>Search<input name="search" value="{{ search }}" placeholder="Q-number, SKU, or title"></label>
   <label>Status<select name="status"><option value="">All statuses</option>{% for value in ('acquired','listed','sold','archived') %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ value|title }}</option>{% endfor %}</select></label>

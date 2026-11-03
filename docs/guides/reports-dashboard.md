@@ -11,7 +11,8 @@ state and margins use aggregate recorded profit over positive gross.
 Holding times require explicit lifecycle timestamps. Historical sell-through is unavailable because
 the database has no defensible period-opening inventory or full transition history. The dashboard's
 attention queue is computed only from local durable records. Every local page stays usable when eBay
-is unavailable; only **eBay Listings** makes a live request.
+is unavailable; only **eBay Listings** makes a live request. Inventory and sales can be downloaded
+as [CSV exports](data-export.md).
 
 ## Phone and small screens
 
