@@ -1,7 +1,10 @@
+import csv
+import io
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from keyring.errors import KeyringError
+import pytest
 
 from inventory.store import InventoryStore
 from inventory.attachments import AttachmentService
@@ -10,6 +13,7 @@ from ebay.orders import EbayOrder, EbayOrderLineItem, Money, OrderPricingSummary
 import web.app as web_app
 from web.app import app
 from tests.web_client import local_client
+from reports.csv_export import export_sales_csv
 
 
 def _client(monkeypatch, tmp_path):
@@ -53,6 +57,70 @@ def _sold(
         marketplace_tax=Decimal(marketplace_tax) if marketplace_tax is not None else None,
     )
     return item, sale
+
+
+@pytest.mark.parametrize(
+    "category,cost_type,column",
+    [
+        ("fees", "marketplace_fee", "marketplace_fees"),
+        ("shipping", "shipping_cost", "seller_shipping_cost"),
+        ("refunds", "refund", "refunds"),
+        ("adjustments", "other_adjustment", "other_adjustments_net"),
+    ],
+)
+@pytest.mark.parametrize("amount", [None, "0.00", "7.25"])
+def test_each_missing_cost_keeps_web_and_csv_profit_provisional(
+    monkeypatch, tmp_path, category, cost_type, column, amount
+):
+    client, store = _client(monkeypatch, tmp_path)
+    _item, sale = _sold(store, 1)
+    for other in ("fees", "shipping", "refunds", "adjustments"):
+        if other != category:
+            store.set_reconciliation_confirmation(sale.sale_id, other, confirmed=True)
+    if amount is not None:
+        store.add_sale_cost(sale.sale_id, category=cost_type, amount=Decimal(amount))
+
+    def exported_sale():
+        return next(csv.DictReader(io.StringIO(export_sales_csv(store).decode("utf-8-sig"))))
+
+    expected_profit = format(Decimal("75.00") - Decimal(amount or "0.00"), ".2f")
+    pending = exported_sale()
+    assert pending[column] == (amount if amount is not None else "")
+    assert pending["recorded_profit"] == expected_profit
+    assert pending["realized_profit"] == ""
+    assert pending["profit_status"] == "provisional"
+    assert pending["unconfirmed_categories"] == category
+    assert pending["reconciliation_state"] == "partially_reconciled"
+    detail = client.get(f"/sales/{sale.sale_id}")
+    assert detail.status_code == 200
+    assert "Recorded profit (provisional)" in detail.text
+    assert detail.text.count("recon-card is-unknown") == 1
+
+    confirmed = client.post(
+        f"/sales/{sale.sale_id}/accounting",
+        data={
+            "category": category,
+            "action": "confirm_existing" if amount is not None else "confirm_zero",
+        },
+        follow_redirects=False,
+    )
+    assert confirmed.status_code == 303
+    complete = exported_sale()
+    assert complete[column] == (amount if amount is not None else "0.00")
+    assert complete["recorded_profit"] == complete["realized_profit"] == expected_profit
+    assert complete["profit_status"] == "realized"
+    assert complete["unconfirmed_categories"] == ""
+    assert complete["reconciliation_state"] == "fully_reconciled"
+    assert "Recorded profit (provisional)" not in client.get(f"/sales/{sale.sale_id}").text
+
+    reset = client.post(
+        f"/sales/{sale.sale_id}/accounting",
+        data={"category": category, "action": "unknown"},
+        follow_redirects=False,
+    )
+    assert reset.status_code == 303
+    assert exported_sale() == pending
+    assert "Recorded profit (provisional)" in client.get(f"/sales/{sale.sale_id}").text
 
 
 def _ebay_order(*lines, order_id="order-1"):
