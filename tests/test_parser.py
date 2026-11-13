@@ -38,6 +38,31 @@ def test_missing_specs_and_exclusions_are_explicit():
     assert "low_knowledge_seller" not in specs.flags
 
 
+def test_negation_applies_to_every_extra_in_a_comma_list():
+    """
+    exclude every extra named in a negated comma-separated list
+    :returns: None
+    """
+    for description in (
+        "No monitor, keyboard or mouse included.",
+        "No monitor, keyboard, or mouse.",
+        "Without monitor, keyboard and mouse.",
+    ):
+        specs = extract_specs("Desktop", description)
+
+        assert specs.extras == [], description
+
+
+def test_negation_does_not_leak_past_an_unrelated_comma():
+    """
+    keep extras that follow an unrelated negated phrase
+    :returns: None
+    """
+    specs = extract_specs("Desktop", "No smoking home, monitor and keyboard included.")
+
+    assert {"monitor", "keyboard"}.issubset(specs.extras)
+
+
 def test_ai_failure_returns_deterministic_specs(monkeypatch):
     """
     return deterministic specs when AI enrichment fails

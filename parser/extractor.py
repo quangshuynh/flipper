@@ -19,6 +19,17 @@ EXTRA_PATTERNS = {
     "chair": r"\bchair\b",
 }
 
+_EXTRA_ITEM = "(?:" + "|".join(EXTRA_PATTERNS.values()) + ")"
+
+# "No monitor or keyboard" and "No monitor, keyboard, or mouse": a negation that
+# introduces a list of extras applies to every item in that list.
+_EXCLUDED_EXTRA = re.compile(
+    r"(?:\bno|\bwithout|\bnot included)[^.!?,]*?"
+    rf"(?:{_EXTRA_ITEM}(?:,\s*|,?\s+(?:or|and)\s+))*"
+    r"(?:,?\s+or)?\s*$",
+    flags=re.IGNORECASE,
+)
+
 LOW_KNOWLEDGE_PATTERNS = [
     "don't know much about computers",
     "dont know much about computers",
@@ -452,11 +463,7 @@ def _detect_extras(text: str) -> list[str]:
     for item, pattern in EXTRA_PATTERNS.items():
         for match in re.finditer(pattern, text, flags=re.IGNORECASE):
             preceding_text = text[: match.start()]
-            excluded = re.search(
-                r"(?:\bno|\bwithout|\bnot included)[^.!?,]*(?:,?\s+or)?\s*$",
-                preceding_text,
-                flags=re.IGNORECASE,
-            )
+            excluded = _EXCLUDED_EXTRA.search(preceding_text)
             if not excluded:
                 found.append(item)
                 break
