@@ -30,6 +30,13 @@ _EXCLUDED_EXTRA = re.compile(
     flags=re.IGNORECASE,
 )
 
+# "No monitor, keyboard is included": "is included" starts a new affirmative
+# clause, so the preceding "No …," does not apply to this item.
+_AFFIRMED_EXTRA = re.compile(
+    r"\s+(?:is|are)\s+included\b",
+    flags=re.IGNORECASE,
+)
+
 LOW_KNOWLEDGE_PATTERNS = [
     "don't know much about computers",
     "dont know much about computers",
@@ -463,10 +470,13 @@ def _detect_extras(text: str) -> list[str]:
     for item, pattern in EXTRA_PATTERNS.items():
         for match in re.finditer(pattern, text, flags=re.IGNORECASE):
             preceding_text = text[: match.start()]
+            following_text = text[match.end() :]
             excluded = _EXCLUDED_EXTRA.search(preceding_text)
-            if not excluded:
-                found.append(item)
-                break
+            # A following "is included" / "are included" cuts the negation short.
+            if excluded and not _AFFIRMED_EXTRA.match(following_text):
+                continue
+            found.append(item)
+            break
 
     return found
 

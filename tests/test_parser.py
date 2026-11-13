@@ -63,6 +63,17 @@ def test_negation_does_not_leak_past_an_unrelated_comma():
     assert {"monitor", "keyboard"}.issubset(specs.extras)
 
 
+def test_negation_stops_when_the_next_item_is_included():
+    """
+    exclude a negated extra, but keep one that is explicitly included
+    :returns: None
+    """
+    specs = extract_specs("Desktop", "No monitor, keyboard is included.")
+
+    assert "monitor" not in specs.extras
+    assert "keyboard" in specs.extras
+
+
 def test_ai_failure_returns_deterministic_specs(monkeypatch):
     """
     return deterministic specs when AI enrichment fails
