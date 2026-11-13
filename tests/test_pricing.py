@@ -1,6 +1,9 @@
 import sqlite3
 
+import pytest
+
 from models import ParsedSpecs
+from parser.extractor import extract_specs
 from pricing import estimator
 
 
@@ -75,3 +78,32 @@ def test_score_caps_at_one_hundred_and_ignores_seller_knowledge():
 
     assert flagged == plain
     assert flagged[0] <= 100
+
+
+@pytest.mark.parametrize(
+    ("description", "included"),
+    [
+        ("No monitor, but keyboard included.", ["keyboard"]),
+        ("No monitor, keyboard included.", ["keyboard"]),
+        ("Keyboard included, no monitor.", ["keyboard"]),
+        ("No monitor or keyboard, mouse included.", ["mouse"]),
+    ],
+)
+def test_negated_extras_do_not_raise_value_or_score(description, included):
+    """
+    count only included extras toward resale value and deal score
+    :param description: listing description with mixed negation
+    :param included: extras that are actually included
+    :returns: None
+    """
+    parsed = extract_specs("Desktop", description)
+    expected = ParsedSpecs(extras=included)
+
+    value = estimator.estimate_market_value(parsed)
+    assert value == estimator.estimate_market_value(expected)
+    assert value == estimator.estimate_market_value(ParsedSpecs()) + sum(
+        estimator.EXTRA_VALUES[extra] for extra in included
+    )
+    assert estimator.score_deal(300, value, parsed, 10) == estimator.score_deal(
+        300, value, expected, 10
+    )
