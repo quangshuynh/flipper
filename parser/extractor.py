@@ -30,10 +30,12 @@ _EXCLUDED_EXTRA = re.compile(
     flags=re.IGNORECASE,
 )
 
-# "No monitor, keyboard is included": "is included" starts a new affirmative
-# clause, so the preceding "No …," does not apply to this item.
+# "No monitor, keyboard included" and "No monitor or keyboard, mouse is
+# included": an extra that starts a new comma clause and is directly followed by
+# "included" is affirmed, so the earlier "No …" does not apply to it.
+_CLAUSE_START = re.compile(r",\s*$")
 _AFFIRMED_EXTRA = re.compile(
-    r"\s+(?:is|are)\s+included\b",
+    r"\s+(?:(?:is|are)\s+)?included\b",
     flags=re.IGNORECASE,
 )
 
@@ -472,8 +474,10 @@ def _detect_extras(text: str) -> list[str]:
             preceding_text = text[: match.start()]
             following_text = text[match.end() :]
             excluded = _EXCLUDED_EXTRA.search(preceding_text)
-            # A following "is included" / "are included" cuts the negation short.
-            if excluded and not _AFFIRMED_EXTRA.match(following_text):
+            affirmed = _CLAUSE_START.search(preceding_text) and _AFFIRMED_EXTRA.match(
+                following_text
+            )
+            if excluded and not affirmed:
                 continue
             found.append(item)
             break

@@ -1,3 +1,5 @@
+import pytest
+
 from parser.ai_enricher import enrich_specs_with_ai
 from parser.extractor import extract_specs
 
@@ -72,6 +74,29 @@ def test_negation_stops_when_the_next_item_is_included():
 
     assert "monitor" not in specs.extras
     assert "keyboard" in specs.extras
+
+
+@pytest.mark.parametrize(
+    ("description", "included", "excluded"),
+    [
+        ("No monitor, but keyboard included.", {"keyboard"}, {"monitor"}),
+        ("No monitor, keyboard included.", {"keyboard"}, {"monitor"}),
+        ("Keyboard included, no monitor.", {"keyboard"}, {"monitor"}),
+        ("No monitor or keyboard, mouse included.", {"mouse"}, {"monitor", "keyboard"}),
+    ],
+)
+def test_mixed_negation_keeps_only_included_extras(description, included, excluded):
+    """
+    keep explicitly included extras and drop negated ones in mixed phrasings
+    :param description: listing description
+    :param included: extras that must be detected
+    :param excluded: extras that must not be detected
+    :returns: None
+    """
+    specs = extract_specs("Desktop", description)
+
+    assert set(specs.extras) == included, description
+    assert not excluded & set(specs.extras), description
 
 
 def test_ai_failure_returns_deterministic_specs(monkeypatch):
